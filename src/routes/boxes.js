@@ -4,6 +4,14 @@ import { generateUniqueCodeAsync } from "../codes.js";
 import { nowIso, expiresAt } from "../db.js";
 import { authorize, clientIp, parseBearer } from "../auth.js";
 import { hashKey as hashLimiterKey } from "../keys.js";
+import { validateHandle } from "../handles.js";
+
+async function handleTaken(db, handle) {
+  const live = await db.prepare("SELECT 1 FROM boxes WHERE id = ?").get(handle);
+  if (live) return true;
+  const tomb = await db.prepare("SELECT 1 FROM tombstones WHERE id = ?").get(handle);
+  return Boolean(tomb);
+}
 
 export default async function boxRoutes(app) {
   const { db, config, limiter } = app;
@@ -24,16 +32,30 @@ export default async function boxRoutes(app) {
       if (title.length > 120) throw errors.validation("title must be at most 120 characters");
     }
 
+    // Optional custom handle: a human-readable box id like "russ".
+    // The handle becomes the box id itself.
+    let code;
+    let customHandle = false;
+    if (req.body?.handle !== undefined && req.body?.handle !== null && req.body.handle !== "") {
+      const checked = validateHandle(req.body.handle);
+      if (!checked.ok) throw errors.validation(checked.message);
+      if (await handleTaken(db, checked.handle)) {
+        throw errors.conflict("that handle is already taken");
+      }
+      code = checked.handle;
+      customHandle = true;
+    } else {
+      code = await generateUniqueCodeAsync(async (id) => {
+        const live = await db.prepare("SELECT 1 FROM boxes WHERE id = ?").get(id);
+        if (live) return true;
+        const tomb = await db.prepare("SELECT 1 FROM tombstones WHERE id = ?").get(id);
+        return Boolean(tomb);
+      });
+      if (!code) throw errors.internal("could not allocate box id");
+    }
+
     const { readKey, writeKey } = generateKeyPair();
     const createdAt = nowIso();
-
-    const code = await generateUniqueCodeAsync(async (id) => {
-      const live = await db.prepare("SELECT 1 FROM boxes WHERE id = ?").get(id);
-      if (live) return true;
-      const tomb = await db.prepare("SELECT 1 FROM tombstones WHERE id = ?").get(id);
-      return Boolean(tomb);
-    });
-    if (!code) throw errors.internal("could not allocate box id");
 
     try {
       await db.prepare(
@@ -41,6 +63,10 @@ export default async function boxRoutes(app) {
          VALUES (?, ?, ?, ?, ?, NULL, ?)`
       ).run(code, hashKey(readKey), hashKey(writeKey), createdAt, createdAt, title ?? null);
     } catch (err) {
+      // Race: two creates claimed the same custom handle at once.
+      if (customHandle && err && err.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        throw errors.conflict("that handle is already taken");
+      }
       req.log.error({ err: err.message, box_id: code }, "insert box failed");
       throw errors.internal();
     }
@@ -49,6 +75,7 @@ export default async function boxRoutes(app) {
     reply.code(201);
     return {
       box_id: code,
+      handle: customHandle ? code : null,
       read_key: readKey,
       write_key: writeKey,
       created_at: createdAt,
@@ -76,6 +103,7 @@ export default async function boxRoutes(app) {
     const tx = db.transaction(async () => {
       await db.prepare("UPDATE messages SET reply_to = NULL WHERE box_id = ?").run(req.params.box_id);
       await db.prepare("DELETE FROM messages WHERE box_id = ?").run(req.params.box_id);
+      await db.prepare("DELETE FROM connection_requests WHERE box_id = ?").run(req.params.box_id);
       await db.prepare("INSERT OR REPLACE INTO tombstones (id, deleted_at) VALUES (?, ?)").run(
         req.params.box_id,
         nowIso()

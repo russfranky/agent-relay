@@ -1,8 +1,10 @@
 import { renderBoxPage, escapeHtml } from "../views/boxPage.js";
+import { renderLanding, renderCreated } from "../views/landing.js";
 import { parseBearer, authorize, clientIp } from "../auth.js";
 import { errors } from "../errors.js";
 import { hashKey } from "../keys.js";
 import { ApiError } from "../errors.js";
+import { validateHandle } from "../handles.js";
 
 export { escapeHtml };
 
@@ -38,6 +40,30 @@ async function loadRecent(db, boxId, limit = 50) {
       .prepare(`SELECT * FROM messages WHERE box_id = ? ORDER BY id DESC LIMIT ?`)
       .all(boxId, limit)
   ).reverse();
+}
+
+function publicRequest(row) {
+  return {
+    id: row.id,
+    box_id: row.box_id,
+    from_handle: row.from_handle,
+    from_name: row.from_name,
+    note: row.note,
+    status: row.status,
+    created_at: row.created_at,
+    decided_at: row.decided_at,
+  };
+}
+
+async function loadPendingRequests(db, boxId, limit = 50) {
+  const rows = await db
+    .prepare(
+      `SELECT * FROM connection_requests
+       WHERE box_id = ? AND status = 'pending'
+       ORDER BY id DESC LIMIT ?`
+    )
+    .all(boxId, limit);
+  return rows.map(publicRequest);
 }
 
 function publicMessage(row) {
@@ -84,6 +110,57 @@ export default async function webRoutes(app) {
     );
   }
 
+  // Landing page: claim a handle from the browser.
+  app.get("/", async (req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderLanding({ origin: originOf(req) });
+  });
+
+  app.post("/", async (req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    const origin = originOf(req);
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    if (body.action !== "claim") {
+      return renderLanding({ origin });
+    }
+    const rawHandle = String(body.handle || "");
+    const checked = validateHandle(rawHandle);
+    const title = String(body.title || "").slice(0, 120);
+    if (!checked.ok) {
+      return renderLanding({ origin, error: checked.message });
+    }
+    let res;
+    try {
+      res = await app.inject({
+        method: "POST",
+        url: "/v1/boxes",
+        headers: { "content-type": "application/json" },
+        payload: { handle: checked.handle, title: title || undefined },
+      });
+    } catch {
+      return renderLanding({ origin, error: "Could not claim that handle. Try again." });
+    }
+    if (res.statusCode !== 201) {
+      let message = "Could not claim that handle. Try again.";
+      try {
+        const errBody = res.json();
+        if (errBody?.error?.code === "conflict") message = "That handle is already taken. Pick another.";
+        else if (errBody?.error?.message) message = String(errBody.error.message);
+      } catch {
+        // keep generic message
+      }
+      return renderLanding({ origin, error: message });
+    }
+    const created = res.json();
+    return renderCreated({
+      origin,
+      boxId: created.box_id,
+      readKey: created.read_key,
+      writeKey: created.write_key,
+      title,
+    });
+  });
+
   app.get("/b/:box_id", async (req, reply) => {
     // Never look up the box here — title/existence must not leak pre-auth.
     reply.type("text/html; charset=utf-8");
@@ -127,10 +204,34 @@ export default async function webRoutes(app) {
       }
     }
 
+    if (action === "approve_request" || action === "reject_request") {
+      const writeKey = String(body.write_key || "");
+      const reqId = Number(body.req_id);
+      if (writeKey && Number.isInteger(reqId) && reqId > 0) {
+        try {
+          await app.inject({
+            method: "POST",
+            url: `/v1/boxes/${encodeURIComponent(boxId)}/requests/${reqId}/${
+              action === "approve_request" ? "approve" : "reject"
+            }`,
+            headers: {
+              authorization: `Bearer ${writeKey}`,
+              "content-type": "application/json",
+            },
+          });
+        } catch {
+          // fall through to the unlock render below
+        }
+      }
+      // fall through: re-render the unlocked box with the read key
+    }
+
     const readKey = String(body.read_key || "");
+    const writeKey = String(body.write_key || "");
     try {
       const box = await authorize(db, config, boxId, `Bearer ${readKey}`, "read");
       const messages = await loadRecent(db, box.id, 50);
+      const requests = await loadPendingRequests(db, box.id);
       const nextSince = messages.length ? messages[messages.length - 1].id : 0;
       const oldestId = messages.length ? messages[0].id : null;
       return renderBoxPage({
@@ -143,6 +244,8 @@ export default async function webRoutes(app) {
         oldestId,
         origin,
         readKeyForForm: readKey,
+        writeKeyForForm: writeKey,
+        requests,
       });
     } catch (err) {
       const expired = err instanceof ApiError && err.code === "gone_expired";
@@ -163,12 +266,14 @@ export default async function webRoutes(app) {
     rateLimitRead(app, req, reply);
     const box = await authorize(db, config, req.params.box_id, req.headers.authorization, "read");
     const messages = await loadRecent(db, box.id, 50);
+    const requests = await loadPendingRequests(db, box.id);
     const nextSince = messages.length ? messages[messages.length - 1].id : 0;
     const oldestId = messages.length ? messages[0].id : null;
     return {
       box_id: box.id,
       title: box.title || "",
       messages: messages.map(publicMessage),
+      requests,
       next_since: nextSince,
       oldest_id: oldestId,
     };

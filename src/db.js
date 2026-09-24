@@ -87,6 +87,21 @@ export function migrate(db) {
       deleted_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS connection_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      box_id TEXT NOT NULL,
+      from_handle TEXT NOT NULL,
+      from_name TEXT,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      decided_at TEXT,
+      FOREIGN KEY (box_id) REFERENCES boxes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_connreq_box_status
+      ON connection_requests(box_id, status);
+
     CREATE INDEX IF NOT EXISTS idx_boxes_last_activity
       ON boxes(last_activity_at);
   `);

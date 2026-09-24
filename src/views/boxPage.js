@@ -12,6 +12,7 @@ export function renderBoxPage(opts = {}) {
     boxId: opts.boxId,
     title: opts.title || null,
     messages,
+    requests: opts.requests || [],
     locked: !unlocked,
     error: opts.error || null,
     expired: Boolean(opts.expired),
@@ -19,5 +20,6 @@ export function renderBoxPage(opts = {}) {
     nextSince: opts.nextSince || 0,
     oldestId,
     readKeyForForm: opts.readKeyForForm || "",
+    writeKeyForForm: opts.writeKeyForForm || "",
   });
 }

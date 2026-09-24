@@ -20,6 +20,16 @@ function agentSnippet(origin, boxId) {
     `curl -sS "${origin}/v1/boxes/${boxId}/messages?since=0&limit=50" \\`,
     `  -H "Authorization: Bearer $READ_KEY"`,
     ``,
+    `Ask to connect (no key needed):`,
+    `curl -sS -X POST "${origin}/v1/boxes/${boxId}/requests" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{"from_handle":"your-handle","from_name":"Your Name","note":"hello"}'`,
+    ``,
+    `Approve or decline requests on the mailbox web page, or:`,
+    `  POST /v1/boxes/${boxId}/requests (read key lists them)`,
+    `  POST /v1/boxes/${boxId}/requests/{id}/approve (write key)`,
+    `  POST /v1/boxes/${boxId}/requests/{id}/reject (write key)`,
+    ``,
     `When finished, ask the human to DELETE the box with the write key.`,
   ].join("\n");
 }
@@ -47,6 +57,51 @@ function renderMessages(messages) {
     .join("\n");
 }
 
+function renderRequests(requests, boxId, readKey, writeKey) {
+  const safeId = escapeHtml(boxId);
+  const head = `<p class="label">Connection requests</p>`;
+  if (!requests.length) {
+    return `<section class="panel" id="requests-panel" data-testid="requests">${head}
+      <p class="empty" data-testid="no-requests">No pending connection requests.</p>
+    </section>`;
+  }
+  const items = requests
+    .map((r) => {
+      const name = r.from_name
+        ? ` <span class="muted">(${escapeHtml(r.from_name)})</span>`
+        : "";
+      const note = r.note
+        ? `<p class="req-note">${escapeHtml(r.note)}</p>`
+        : "";
+      const rid = escapeHtml(String(r.id));
+      return `<div class="req" data-testid="request" data-req-id="${rid}">
+  <div class="req-head"><span class="sender">${escapeHtml(r.from_handle)}</span>${name}
+  <time datetime="${escapeHtml(r.created_at)}" data-ts="${escapeHtml(r.created_at)}">${escapeHtml(r.created_at)}</time></div>
+  ${note}
+  <div class="row">
+    <form method="post" action="/b/${safeId}">
+      <input type="hidden" name="action" value="approve_request">
+      <input type="hidden" name="req_id" value="${rid}">
+      <input type="hidden" name="read_key" value="${escapeHtml(readKey)}">
+      <input type="hidden" name="write_key" value="${escapeHtml(writeKey)}">
+      <button type="submit">Approve</button>
+    </form>
+    <form method="post" action="/b/${safeId}">
+      <input type="hidden" name="action" value="reject_request">
+      <input type="hidden" name="req_id" value="${rid}">
+      <input type="hidden" name="read_key" value="${escapeHtml(readKey)}">
+      <input type="hidden" name="write_key" value="${escapeHtml(writeKey)}">
+      <button type="submit" class="ghost">Decline</button>
+    </form>
+  </div>
+</div>`;
+    })
+    .join("\n");
+  return `<section class="panel" id="requests-panel" data-testid="requests">${head}
+      ${items}
+    </section>`;
+}
+
 /**
  * Server-rendered box page. `locked` means we have not accepted a read key
  * on this request (JS may still unlock from sessionStorage).
@@ -55,6 +110,7 @@ export function renderBoxPage({
   boxId,
   title = null,
   messages = [],
+  requests = [],
   locked = true,
   error = null,
   expired = false,
@@ -62,11 +118,13 @@ export function renderBoxPage({
   nextSince = 0,
   oldestId = null,
   readKeyForForm = "",
+  writeKeyForForm = "",
 }) {
   const safeId = escapeHtml(boxId);
   const heading = title ? escapeHtml(title) : "untitled box";
   const snippet = escapeHtml(agentSnippet(origin, boxId));
   const list = locked && !error ? "" : renderMessages(messages);
+  const reqHtml = locked ? "" : renderRequests(requests, boxId, readKeyForForm, writeKeyForForm);
   const errorHtml = error
     ? `<p class="banner error" data-testid="error" role="alert">${escapeHtml(error)}</p>`
     : "";
@@ -163,6 +221,13 @@ export function renderBoxPage({
       font-family: inherit;
       font-size: 0.98rem;
     }
+    .req { border-top: 1px solid var(--rule); padding: 0.6rem 0; }
+    .req-head { display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.88rem; align-items: baseline; }
+    .req-note { margin: 0.3rem 0; font-size: 0.95rem; white-space: pre-wrap; word-break: break-word; }
+    .muted { color: var(--muted); }
+    .hint { color: var(--muted); font-size: 0.85rem; font-weight: normal; }
+    form.inline-form { display: inline; margin: 0; padding: 0; border: 0; background: none; }
+    #requests-panel input[type="password"] { max-width: 22rem; }
     .empty { color: var(--muted); font-style: italic; }
     .banner { padding: 0.6rem 0.75rem; border: 1px solid var(--ink); margin: 0 0 1rem; }
     .banner.error { border-color: var(--stamp); color: var(--stamp); }
@@ -198,6 +263,8 @@ export function renderBoxPage({
         <input type="hidden" name="action" value="unlock">
         <label for="read_key">Read key</label>
         <input id="read_key" name="read_key" type="password" autocomplete="off" spellcheck="false" required>
+        <label for="write_key_unlock">Write key <span class="hint">(optional, needed to approve connection requests)</span></label>
+        <input id="write_key_unlock" name="write_key" type="password" autocomplete="off" spellcheck="false">
         <button type="submit">Open box</button>
       </form>
     </section>
@@ -208,6 +275,8 @@ export function renderBoxPage({
         <button type="button" class="ghost" id="copy-snippet">Copy agent instructions</button>
       </div>
       <pre class="snippet" id="agent-snippet">${snippet}</pre>
+
+      ${reqHtml}
 
       <h3>Messages</h3>
       <p class="row">
@@ -286,8 +355,71 @@ export function renderBoxPage({
       if (oldestId != null) wrap.setAttribute("data-oldest", String(oldestId));
     }
 
-    function genericFail() {
-      show($("unlock-panel"), true);
+    function renderRequestRow(r) {
+      var name = r.from_name ? ' <span class="muted">(' + escapeHtml(r.from_name) + ")</span>" : "";
+      var note = r.note ? '<p class="req-note">' + escapeHtml(r.note) + "</p>" : "";
+      var rid = escapeHtml(String(r.id));
+      return '<div class="req" data-testid="request" data-req-id="' + rid + '">' +
+        '<div class="req-head"><span><span class="sender">' + escapeHtml(r.from_handle) + "</span>" + name + "</span>" +
+        '<time datetime="' + escapeHtml(r.created_at) + '" data-ts="' + escapeHtml(r.created_at) + '">' +
+        escapeHtml(r.created_at) + "</time></div>" +
+        note +
+        '<div class="row">' +
+        '<button type="button" data-verb="approve" data-req-id="' + rid + '">Approve</button>' +
+        '<button type="button" class="ghost" data-verb="reject" data-req-id="' + rid + '">Decline</button>' +
+        "</div></div>";
+    }
+
+    function renderRequestsPanel(reqs) {
+      var panel = $("requests-panel");
+      if (!panel) return;
+      var wkVal = "";
+      var existingWk = $("req-write-key");
+      if (existingWk) wkVal = existingWk.value;
+      var html = '<p class="label">Connection requests</p>';
+      if (!reqs || !reqs.length) {
+        html += '<p class="empty" data-testid="no-requests">No pending connection requests.</p>';
+      } else {
+        html += '<label class="hint" for="req-write-key">Write key (to approve or decline)</label>' +
+          '<input type="password" id="req-write-key" autocomplete="off" spellcheck="false" value="' +
+          escapeHtml(wkVal) + '">' +
+          reqs.map(renderRequestRow).join("");
+      }
+      panel.innerHTML = html;
+      localizeTimes(panel);
+    }
+
+    async function refreshRequests() {
+      var key = sessionStorage.getItem(rkStore);
+      if (!key) return;
+      try {
+        var res = await fetch("/v1/boxes/" + encodeURIComponent(boxId) + "/requests", {
+          headers: { Authorization: "Bearer " + key }
+        });
+        if (!res.ok) return;
+        var data = await res.json();
+        renderRequestsPanel(data.requests || []);
+      } catch (e) { /* ignore transient */ }
+    }
+
+    async function decideRequest(reqId, verb) {
+      var wkInput = $("req-write-key");
+      var wk = (wkInput && wkInput.value.trim()) || sessionStorage.getItem(wkStore) || "";
+      if (!wk) { setStatus("enter your write key to approve requests"); return; }
+      sessionStorage.setItem(wkStore, wk);
+      try {
+        var res = await fetch(
+          "/v1/boxes/" + encodeURIComponent(boxId) + "/requests/" + encodeURIComponent(reqId) + "/" + verb,
+          { method: "POST", headers: { Authorization: "Bearer " + wk } }
+        );
+        if (res.status === 401) { setStatus("write key rejected"); return; }
+        if (!res.ok) { setStatus("error " + res.status); return; }
+        setStatus(verb === "approve" ? "connection approved" : "connection declined");
+        refreshRequests();
+      } catch (e) { setStatus("request failed"); }
+    }
+
+    function genericFail() {      show($("unlock-panel"), true);
       show($("box-panel"), false);
       sessionStorage.removeItem(rkStore);
       var main = document.querySelector("main");
@@ -330,11 +462,14 @@ export function renderBoxPage({
       oldestId = data.oldest_id == null ? null : data.oldest_id;
       if (data.messages && data.messages.length) appendMessages(data.messages, false);
       else $("messages").innerHTML = '<p class="empty" data-testid="empty">No messages yet.</p>';
+      renderRequestsPanel(data.requests || []);
       show($("load-more"), oldestId != null);
       return true;
     }
 
+    var pollTick = 0;
     async function poll() {
+      pollTick++;
       try {
         var res = await apiGet(nextSince, 50);
         if (res.status === 401) { genericFail(); return; }
@@ -343,6 +478,7 @@ export function renderBoxPage({
         var data = await res.json();
         if (data.messages && data.messages.length) appendMessages(data.messages, false);
         if (typeof data.next_since === "number") nextSince = data.next_since;
+        if (pollTick % 6 === 0) refreshRequests();
       } catch (e) { /* ignore transient */ }
     }
 
@@ -421,6 +557,13 @@ export function renderBoxPage({
     });
     var more = $("load-more");
     if (more) more.addEventListener("click", loadOlder);
+
+    document.addEventListener("click", function (ev) {
+      var t = ev.target;
+      if (t && t.dataset && t.dataset.verb && t.dataset.reqId) {
+        decideRequest(t.dataset.reqId, t.dataset.verb);
+      }
+    });
 
     var existing = sessionStorage.getItem(rkStore);
     if (existing) {

@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS tombstones (
   deleted_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS connection_requests (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  box_id TEXT NOT NULL REFERENCES boxes(id) ON DELETE CASCADE,
+  from_handle TEXT NOT NULL,
+  from_name TEXT,
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL,
+  decided_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_connreq_box_status
+  ON connection_requests(box_id, status);
+
 CREATE INDEX IF NOT EXISTS idx_boxes_last_activity
   ON boxes(last_activity_at);
 `;
