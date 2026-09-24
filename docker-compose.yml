@@ -1,0 +1,27 @@
+services:
+  relay:
+    build: .
+    image: agent-relay:0.1.0
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      DB_PATH: /data/relay.db
+      RETENTION_DAYS: "30"
+      MAX_BOX_MESSAGES: "10000"
+      RATE_LIMIT_WRITES_PER_MIN: "60"
+      RATE_LIMIT_READS_PER_MIN: "300"
+      RATE_LIMIT_CREATE_PER_IP_PER_DAY: "20"
+      LOG_LEVEL: info
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  relay-data:
