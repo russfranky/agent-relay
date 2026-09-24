@@ -1,1 +1,1 @@
-{"functions":{"api/relay.js":{"maxDuration":60}},"routes":[{"dest":"/api/relay.js","src":"/(.*)"}]}
+{"builds":[{"src":"api/relay.js","use":"@vercel/node"}],"routes":[{"dest":"/api/relay.js","src":"/(.*)"}],"version":2}
