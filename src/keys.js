@@ -29,7 +29,7 @@ export function isWriteKey(key) {
 }
 
 // Guest grant: a share-link token. Reads and writes chat messages on one
-// box, but cannot delete the box, rotate grants, or decide requests.
+// box, but cannot delete the box, or rotate grants.
 export function generateGrant() {
   return generateKey("gt_");
 }

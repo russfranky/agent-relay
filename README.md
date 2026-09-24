@@ -8,12 +8,14 @@ For a human buddy: make one link, send it, start talking.
 
 This is a prototype: correctness, basic security, and a clean agent-usable API. Not scale.
 
-Runtime: Node.js 22+. SQLite via `node:sqlite` (WAL). Zero npm dependencies.
+Runtime: Node.js 22+. SQLite via `node:sqlite` (WAL) locally; Postgres via
+`@neondatabase/serverless` when `DATABASE_URL` is set (production). That is the
+only npm dependency; the HTTP layer is a small built-in framework.
 
 ## For humans: one link, no coding
 
 Open the landing page, type a chat name, hit **Create chat link**. You get a
-link like `https://agent-relay-mu.vercel.app/c/russ-chat#g=gt_...`. Text or
+link like `https://agent-relay-mu.vercel.app/c/bright-fox-42#g=gt_...`. Text or
 email it to your buddy. They open it, pick a display name, and you are talking.
 Messages appear live. No accounts, no app to install, nothing to configure.
 
@@ -49,7 +51,6 @@ Response (`201`):
 ```json
 {
   "box_id": "bright-fox-42",
-  "handle": null,
   "read_key": "rk_…",
   "write_key": "wk_…",
   "share_url": "/c/bright-fox-42#g=gt_…",
@@ -60,8 +61,8 @@ Response (`201`):
 
 Save both keys. They are shown **once**. The server stores only SHA-256 hashes.
 `share_url` is the human invite link: send it to a buddy, they open it and chat.
-Optional body: `{ "title": "...", "handle": "my-chat" }` — a custom handle becomes
-the box id (3–32 chars, lowercase letters/digits/hyphens, first come first served).
+Optional body: `{ "title": "..." }`. Box ids are always random `word-word-number`
+codes — nothing to squat on, nothing to remember.
 
 ### 2. Send a message (write key)
 
@@ -114,9 +115,9 @@ Human chat pages: `/c/:box_id` (chat UI, grant in the URL fragment) and the land
 
 | Key | Prefix | Grants |
 | --- | --- | --- |
-| read key | `rk_` | `GET /v1/boxes/:box_id/messages`, mailbox web view data |
-| write key | `wk_` | everything the read key grants, plus `POST /v1/boxes/:box_id/messages`, `POST /v1/boxes/:box_id/share/rotate`, `DELETE /v1/boxes/:box_id`, approving/rejecting connection requests |
-| share grant | `gt_` | read and write chat messages for one box only. Cannot rotate the invite, delete the box, or decide requests. Lives in the share-link fragment (`/c/:box_id#g=gt_…`), sent as a Bearer token by the chat page |
+| read key | `rk_` | `GET /v1/boxes/:box_id/messages` |
+| write key | `wk_` | everything the read key grants, plus `POST /v1/boxes/:box_id/messages`, `POST /v1/boxes/:box_id/share/rotate`, `DELETE /v1/boxes/:box_id` |
+| share grant | `gt_` | read and write chat messages for one box only. Cannot rotate the invite or delete the box. Lives in the share-link fragment (`/c/:box_id#g=gt_…`), sent as a Bearer token by the chat page |
 
 - Header only: `Authorization: Bearer <key>`. Never cookies.
 - Raw keys are returned **only** from `POST /v1/boxes`. Stored value is `SHA-256(key)` hex.
@@ -134,11 +135,11 @@ All JSON under `/v1`. Errors are always:
 
 ### `POST /v1/boxes` → `201`
 
-Optional body: `{ "title": "optional label, max 120 chars", "handle": "my-chat" }`.
+Optional body: `{ "title": "optional label, max 120 chars" }`.
 
-Returns `{ box_id, handle, read_key, write_key, share_url, created_at, expires_at }`.
+Returns `{ box_id, read_key, write_key, share_url, created_at, expires_at }`.
 `share_url` is the human invite link (`/c/:box_id#g=gt_…`); minting it is atomic
-with the box. A custom `handle` becomes the box id itself.
+with the box.
 
 `box_id` is `word-word-number` (e.g. `bright-fox-42`) from a fixed 200-word list and a number `10–99`.
 
@@ -163,16 +164,6 @@ Read key (or share grant) required. Returns messages with `id > since`, ascendin
 - `wait` default `0`. With `wait=25`, the request holds open until a message lands or 25 seconds pass (clamped to 30). This replaces polling: loop on `next_since` and you make one request per reply.
 - Response: `{ "messages": [...], "next_since": <last id or the input since> }`.
 
-### `GET /v1/boxes/:box_id/stream?since=<id>` → `200` (chunked NDJSON)
-
-Read key (or share grant) required. The server first replays messages newer
-than `since`, then holds the connection open and flushes each new message as
-one JSON object per line. The stream ends after ~45 seconds; the client
-reconnects with its latest cursor. This is for API clients that can read a
-chunked response. The browser chat page does not use it: serverless hosts can
-buffer chunked responses until the function ends, so the page uses `wait=25`
-long-poll reads instead.
-
 ### `POST /v1/boxes/:box_id/share/rotate` → `200`
 
 Write key required. Revokes every active share grant and mints a fresh
@@ -193,10 +184,6 @@ Human chat page. The share grant travels in the URL fragment (`#g=gt_…`), whic
 the browser never sends to the server; page JavaScript sends it as a Bearer
 token. `/c/:box_id/info` returns the chat title and needs the grant too.
 
-### `GET /b/:box_id`
-
-Older mailbox web view (agent-oriented). Prompts for the read key (sessionStorage, never the URL). Optional send form takes the write key.
-
 ## Error codes
 
 What an agent should do for each code is in [AGENTS.md](./AGENTS.md#error-playbook). Summary:
@@ -206,7 +193,6 @@ What an agent should do for each code is in [AGENTS.md](./AGENTS.md#error-playbo
 | 401 | `unauthorized` | missing/bad/wrong-type key, or box does not exist |
 | 404 | `not_found` | unknown unauthenticated route |
 | 409 | `box_full` | box reached `MAX_BOX_MESSAGES` |
-| 409 | `conflict` | reserved for other conflicts |
 | 410 | `gone_expired` | last write older than retention |
 | 413 | `payload_too_large` | `body` longer than 65536 characters |
 | 422 | `validation_failed` | bad/missing field (message names the field) |
@@ -230,14 +216,14 @@ All settings are environment variables. See `.env.example`.
 | `RATE_LIMIT_IP_WRITES_PER_MIN` | `120` | per-IP floor (cannot omit auth to bypass) |
 | `RATE_LIMIT_IP_READS_PER_MIN` | `600` | per-IP floor |
 | `SWEEP_INTERVAL_MS` | `3600000` | hourly hard-delete of expired boxes |
-| `LOG_LEVEL` | `info` | Fastify log level |
+| `LOG_LEVEL` | `info` | log level |
 
 Logs record request ids, box ids, message ids, and byte lengths. They never record keys, key hashes, or message bodies at info level.
 
 ## Security notes
 
 - No cookies, no sessions on the API. Auth is the bearer key.
-- Web view keeps keys in `sessionStorage` only.
+- The chat page keeps the grant in the URL fragment (never sent to the server) and the display name in `localStorage` only.
 - Message bodies in the web view are HTML-escaped. No markdown, no raw HTML.
 - Deleted box ids are not reissued until their tombstone ages past `RETENTION_DAYS`.
 - Guessing a box id without a key yields `401`, same as a wrong key.

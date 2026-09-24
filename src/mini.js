@@ -16,7 +16,6 @@ class Reply {
     this.statusCode = 200;
     this.headers = {};
     this.sent = false;
-    this.hijacked = false;
     this.payload = undefined;
   }
   code(n) {
@@ -29,14 +28,6 @@ class Reply {
   }
   type(v) {
     return this.header("content-type", v);
-  }
-  // Hand the raw response to the route (long-lived streams). The route
-  // owns the socket from here; the framework must not touch it.
-  // Requires req.rawRes (a live HTTP connection, not inject()).
-  hijack() {
-    this.hijacked = true;
-    this.sent = true;
-    return this;
   }
   send(body) {
     this.payload = body === undefined ? null : body;
@@ -111,8 +102,7 @@ export function createApp() {
       const { keys, regex } = pathToRegex(path);
       routes.push({ method: method.toUpperCase(), path, keys, regex, handler });
     },
-    // Fastify-style (path, [opts], handler). opts are accepted and ignored;
-    // stream routes detect a live socket via req.rawRes themselves.
+    // Fastify-style (path, [opts], handler). opts are accepted and ignored.
     _withOpts(path, a, b) {
       if (typeof a === "function") return { opts: {}, handler: a };
       return { opts: a || {}, handler: b };
@@ -157,9 +147,6 @@ export function createApp() {
         ip: headers["x-forwarded-for"]?.split(",")[0]?.trim() || "127.0.0.1",
         protocol: "http",
         log,
-        // Live HTTP response, present only outside inject(). Stream routes
-        // use it via reply.hijack().
-        rawRes: reqLike.rawRes || null,
       };
       if (req.body === undefined && reqLike.payload !== undefined) {
         const ct = (headers["content-type"] || "").split(";")[0].trim();
@@ -193,7 +180,6 @@ export function createApp() {
             req.params[k] = decodeURIComponent(m[i + 1]);
           });
           const result = await match.handler(req, reply);
-          if (reply.hijacked) return reply;
           if (!reply.sent && result !== undefined) reply.send(result);
         }
       } catch (err) {
@@ -244,9 +230,7 @@ export function createApp() {
             url: req.url,
             headers: req.headers,
             body,
-            rawRes: res,
           });
-          if (reply.hijacked) return; // route owns the socket now
           res.statusCode = reply.statusCode;
           for (const [k, v] of Object.entries(reply.headers)) res.setHeader(k, v);
           let out = reply.payload;

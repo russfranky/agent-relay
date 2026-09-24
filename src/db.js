@@ -87,25 +87,10 @@ export function migrate(db) {
       deleted_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS connection_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      box_id TEXT NOT NULL,
-      from_handle TEXT NOT NULL,
-      from_name TEXT,
-      note TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL,
-      decided_at TEXT,
-      FOREIGN KEY (box_id) REFERENCES boxes(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_connreq_box_status
-      ON connection_requests(box_id, status);
-
     -- Share grants: single-link access for humans. A grant is a bearer
     -- token (gt_…) that reads and writes chat messages on one box, but
-    -- cannot delete the box, rotate grants, or decide requests. The token
-    -- travels in the URL fragment so it never reaches server logs.
+    -- cannot delete the box or rotate grants. The token travels in the
+    -- URL fragment so it never reaches server logs.
     CREATE TABLE IF NOT EXISTS grants (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       box_id TEXT NOT NULL,

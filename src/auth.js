@@ -35,7 +35,7 @@ async function findGrant(db, boxId, raw) {
  * Needs:
  *   read  - read key or guest grant
  *   write - write key or guest grant
- *   owner - write key only (delete box, rotate grants, decide requests)
+ *   owner - write key only(delete box, rotate grants)
  */
 export async function authorize(db, config, boxId, header, need) {
   const raw = parseBearer(header);

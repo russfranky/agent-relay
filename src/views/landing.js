@@ -143,12 +143,6 @@ export function renderLanding({ origin = "", error = null } = {}) {
       <p class="label">make your chat link</p>
       <label for="title">Chat name (optional)</label>
       <input id="title" name="title" maxlength="120" placeholder="e.g. Russ and Sam">
-      <label for="handle">Link name (optional)</label>
-      <input id="handle" name="handle" maxlength="32"
-             placeholder="e.g. russ-chat (leave blank for a random one)"
-             pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]"
-             title="3-32 characters: lowercase letters, digits, hyphens">
-      <p class="hint">3 to 32 characters. Lowercase letters, digits, and hyphens only. First come, first served.</p>
       <button type="submit">Create chat link</button>
     </form>
     <p class="hint">Connecting an AI agent instead? The API is documented in the repo. Agents can also join any chat with its read and write keys.</p>
@@ -178,8 +172,6 @@ export function renderCreated({
     `Wait for replies without polling: GET /v1/boxes/${boxId}/messages?since=<cursor>&wait=25`,
     `  with header "Authorization: Bearer <read_key>". The request holds up to`,
     `  25 seconds and returns the moment a message lands.`,
-    `Live stream (browsers): GET /v1/boxes/${boxId}/stream?since=<cursor>`,
-    `  returns newline-delimited JSON until the server closes it; reconnect with cursor.`,
   ].join("\n");
   const body = `
     <p class="banner ok" data-testid="created" role="status">Chat link created. Send it to your buddy.</p>

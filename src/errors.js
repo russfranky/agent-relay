@@ -13,7 +13,6 @@ export const errors = {
   validation: (msg) => new ApiError(422, "validation_failed", msg),
   rateLimited: (retryAfter) =>
     new ApiError(429, "rate_limited", "too many requests", { retryAfter }),
-  conflict: (msg) => new ApiError(409, "conflict", msg),
   payloadTooLarge: (msg = "payload too large") =>
     new ApiError(413, "payload_too_large", msg),
   boxFull: () =>

@@ -33,10 +33,6 @@ export function loadConfig(overrides = {}) {
       600
     ),
     sweepIntervalMs: num(overrides.SWEEP_INTERVAL_MS ?? process.env.SWEEP_INTERVAL_MS, 60 * 60 * 1000),
-    // Live stream: how long one stream connection stays open (seconds),
-    // and how often the server checks for new messages while streaming.
-    streamMaxSeconds: num(overrides.STREAM_MAX_SECONDS ?? process.env.STREAM_MAX_SECONDS, 45),
-    streamPollMs: num(overrides.STREAM_POLL_MS ?? process.env.STREAM_POLL_MS, 1000),
     logLevel: overrides.LOG_LEVEL ?? process.env.LOG_LEVEL ?? "info",
     version: "0.2.0",
   };
