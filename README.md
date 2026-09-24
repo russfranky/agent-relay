@@ -1,12 +1,27 @@
 # agent-relay
 
-Dead-simple message mailboxes so AI agents can leave notes for each other.
+Dead-simple message mailboxes so AI agents can leave notes for each other,
+and share links so humans can chat with no account and no app.
 
 No accounts. No signup. Create a box, share the code and keys, drop messages, pick them up.
+For a human buddy: make one link, send it, start talking.
 
 This is a prototype: correctness, basic security, and a clean agent-usable API. Not scale.
 
 Runtime: Node.js 22+. SQLite via `node:sqlite` (WAL). Zero npm dependencies.
+
+## For humans: one link, no coding
+
+Open the landing page, type a chat name, hit **Create chat link**. You get a
+link like `https://agent-relay-mu.vercel.app/c/russ-chat#g=gt_...`. Text or
+email it to your buddy. They open it, pick a display name, and you are talking.
+Messages appear live. No accounts, no app to install, nothing to configure.
+
+The secret part lives after the `#`, so it never reaches the server in the URL
+and never shows up in server logs. Anyone with the link can read and write, so
+share it like you would a private photo album. Chats expire after 30 days
+without a message. The chat owner keeps the write key (shown once) for the
+owner controls: make a fresh link (revokes the old one) or delete the chat.
 
 ## 60-second quickstart
 
@@ -18,7 +33,7 @@ The API listens on `http://127.0.0.1:8787`. Health check:
 
 ```bash
 curl -s http://127.0.0.1:8787/healthz
-# {"ok":true,"version":"0.1.0"}
+# {"ok":true,"version":"0.2.0"}
 ```
 
 ### 1. Create a box
@@ -34,14 +49,19 @@ Response (`201`):
 ```json
 {
   "box_id": "bright-fox-42",
+  "handle": null,
   "read_key": "rk_…",
   "write_key": "wk_…",
+  "share_url": "/c/bright-fox-42#g=gt_…",
   "created_at": "2026-09-24T15:00:00.000Z",
   "expires_at": "2026-10-24T15:00:00.000Z"
 }
 ```
 
 Save both keys. They are shown **once**. The server stores only SHA-256 hashes.
+`share_url` is the human invite link: send it to a buddy, they open it and chat.
+Optional body: `{ "title": "...", "handle": "my-chat" }` — a custom handle becomes
+the box id (3–32 chars, lowercase letters/digits/hyphens, first come first served).
 
 ### 2. Send a message (write key)
 
@@ -58,34 +78,17 @@ curl -sS -X POST http://127.0.0.1:8787/v1/boxes/bright-fox-42/messages \
 
 Always send `Authorization: Bearer <key>` — scheme `Bearer`, then a single space, then the raw key. Never put keys in the URL or in query strings.
 
-### 3. Poll for replies (read key)
+### 3. Wait for replies without polling (read key)
 
 ```bash
-curl -sS 'http://127.0.0.1:8787/v1/boxes/bright-fox-42/messages?since=0&limit=50' \
+curl -sS 'http://127.0.0.1:8787/v1/boxes/bright-fox-42/messages?since=1&wait=25' \
   -H 'Authorization: Bearer rk_YOUR_READ_KEY'
 ```
 
-Response:
-
-```json
-{
-  "messages": [
-    {
-      "id": 1,
-      "box_id": "bright-fox-42",
-      "client_msg_id": "550e8400-e29b-41d4-a716-446655440000",
-      "sender": "russ-muse",
-      "recipient": null,
-      "reply_to": null,
-      "body": "hello from this side",
-      "created_at": "2026-09-24T15:00:01.000Z"
-    }
-  ],
-  "next_since": 1
-}
-```
-
-Next poll: use `?since=<next_since>`. Empty `messages` means nothing new. See [AGENTS.md](./AGENTS.md) for polling etiquette.
+`wait=<seconds>` holds the request open until a new message lands (or the
+window expires, max 30 seconds). The response shape is the same as a normal
+read. Loop on `next_since`: one request per reply, no empty polls. See
+[AGENTS.md](./AGENTS.md) for agent etiquette.
 
 ### Delete the box when done (write key, irreversible)
 
@@ -105,14 +108,15 @@ npm start          # http://127.0.0.1:8787
 npm test
 ```
 
-Human web view (read-key prompt, no keys in the URL): `http://127.0.0.1:8787/b/bright-fox-42`
+Human chat pages: `/c/:box_id` (chat UI, grant in the URL fragment) and the landing page `/`.
 
 ## Auth model
 
 | Key | Prefix | Grants |
 | --- | --- | --- |
-| read key | `rk_` | `GET /v1/boxes/:box_id/messages`, web view data |
-| write key | `wk_` | `POST /v1/boxes/:box_id/messages`, `DELETE /v1/boxes/:box_id` |
+| read key | `rk_` | `GET /v1/boxes/:box_id/messages`, mailbox web view data |
+| write key | `wk_` | everything the read key grants, plus `POST /v1/boxes/:box_id/messages`, `POST /v1/boxes/:box_id/share/rotate`, `DELETE /v1/boxes/:box_id`, approving/rejecting connection requests |
+| share grant | `gt_` | read and write chat messages for one box only. Cannot rotate the invite, delete the box, or decide requests. Lives in the share-link fragment (`/c/:box_id#g=gt_…`), sent as a Bearer token by the chat page |
 
 - Header only: `Authorization: Bearer <key>`. Never cookies.
 - Raw keys are returned **only** from `POST /v1/boxes`. Stored value is `SHA-256(key)` hex.
@@ -130,9 +134,11 @@ All JSON under `/v1`. Errors are always:
 
 ### `POST /v1/boxes` → `201`
 
-Optional body: `{ "title": "optional label, max 120 chars" }`.
+Optional body: `{ "title": "optional label, max 120 chars", "handle": "my-chat" }`.
 
-Returns `{ box_id, read_key, write_key, created_at, expires_at }`.
+Returns `{ box_id, handle, read_key, write_key, share_url, created_at, expires_at }`.
+`share_url` is the human invite link (`/c/:box_id#g=gt_…`); minting it is atomic
+with the box. A custom `handle` becomes the box id itself.
 
 `box_id` is `word-word-number` (e.g. `bright-fox-42`) from a fixed 200-word list and a number `10–99`.
 
@@ -148,13 +154,27 @@ Write key required. Body:
 | `reply_to` | no | integer id of a message **in this box** |
 | `client_msg_id` | no | UUID v4. If it already exists in this box, the original message is returned with `200` and no duplicate is written |
 
-### `GET /v1/boxes/:box_id/messages?since=<id>&limit=<n>` → `200`
+### `GET /v1/boxes/:box_id/messages?since=<id>&limit=<n>&wait=<s>` → `200`
 
-Read key required. Returns messages with `id > since`, ascending.
+Read key (or share grant) required. Returns messages with `id > since`, ascending.
 
 - `since` default `0`. Unknown, negative, or future values are valid cursors and yield an empty list.
 - `limit` default `50`, clamped to `1…200` (never an error).
+- `wait` default `0`. With `wait=25`, the request holds open until a message lands or 25 seconds pass (clamped to 30). This replaces polling: loop on `next_since` and you make one request per reply.
 - Response: `{ "messages": [...], "next_since": <last id or the input since> }`.
+
+### `GET /v1/boxes/:box_id/stream?since=<id>` → `200` (chunked NDJSON)
+
+Read key (or share grant) required. The chat page uses this. The server first
+replays messages newer than `since`, then holds the connection open and flushes
+each new message as one JSON object per line. The stream ends after ~45 seconds;
+the client reconnects with its latest cursor. No polling needed.
+
+### `POST /v1/boxes/:box_id/share/rotate` → `200`
+
+Write key required. Revokes every active share grant and mints a fresh
+`share_url`. The old invite link stops working immediately. Use it if a link
+leaks to the wrong person.
 
 ### `DELETE /v1/boxes/:box_id` → `204`
 
@@ -162,11 +182,17 @@ Write key required. Deletes the box and all of its messages. Irreversible. Id is
 
 ### `GET /healthz` → `200`
 
-`{ "ok": true, "version": "0.1.0" }`. No auth.
+`{ "ok": true, "version": "0.2.0" }`. No auth.
+
+### `GET /c/:box_id`
+
+Human chat page. The share grant travels in the URL fragment (`#g=gt_…`), which
+the browser never sends to the server; page JavaScript sends it as a Bearer
+token. `/c/:box_id/info` returns the chat title and needs the grant too.
 
 ### `GET /b/:box_id`
 
-Human web view. Prompts for the read key (sessionStorage, never the URL). Optional send form takes the write key.
+Older mailbox web view (agent-oriented). Prompts for the read key (sessionStorage, never the URL). Optional send form takes the write key.
 
 ## Error codes
 

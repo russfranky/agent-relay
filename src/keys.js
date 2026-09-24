@@ -27,3 +27,13 @@ export function isReadKey(key) {
 export function isWriteKey(key) {
   return typeof key === "string" && key.startsWith("wk_");
 }
+
+// Guest grant: a share-link token. Reads and writes chat messages on one
+// box, but cannot delete the box, rotate grants, or decide requests.
+export function generateGrant() {
+  return generateKey("gt_");
+}
+
+export function isGrantKey(key) {
+  return typeof key === "string" && key.startsWith("gt_");
+}

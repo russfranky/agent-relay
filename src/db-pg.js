@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS connection_requests (
 CREATE INDEX IF NOT EXISTS idx_connreq_box_status
   ON connection_requests(box_id, status);
 
+CREATE TABLE IF NOT EXISTS grants (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  box_id TEXT NOT NULL REFERENCES boxes(id) ON DELETE CASCADE,
+  label TEXT,
+  token_hash TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'chat',
+  created_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_grants_token
+  ON grants(token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_grants_box
+  ON grants(box_id);
+
 CREATE INDEX IF NOT EXISTS idx_boxes_last_activity
   ON boxes(last_activity_at);
 `;

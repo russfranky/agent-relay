@@ -1,5 +1,6 @@
+import { timingSafeEqual } from "node:crypto";
 import { errors } from "./errors.js";
-import { hashKey, isReadKey, isWriteKey } from "./keys.js";
+import { hashKey, isGrantKey, isReadKey, isWriteKey } from "./keys.js";
 import { isExpired } from "./db.js";
 
 const BEARER = /^Bearer\s+(\S+)$/i;
@@ -10,24 +11,51 @@ export function parseBearer(header) {
   return m ? m[1] : null;
 }
 
+function safeEqualHex(a, b) {
+  const ab = Buffer.from(String(a), "utf8");
+  const bb = Buffer.from(String(b), "utf8");
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+async function findGrant(db, boxId, raw) {
+  const row = await db
+    .prepare(
+      `SELECT * FROM grants WHERE box_id = ? AND revoked_at IS NULL ORDER BY id DESC`
+    )
+    .all(boxId);
+  const hashed = hashKey(raw);
+  return row.find((g) => g.scope === "chat" && safeEqualHex(g.token_hash, hashed)) || null;
+}
+
 /**
  * Auth-first: missing/malformed header, missing box, and wrong key all
  * return the same 401 so existence is not leaked. Expired boxes return
- * 410 only after the matching key is verified.
+ * 410 only after the credential is verified.
+ *
+ * Needs:
+ *   read  - read key or guest grant
+ *   write - write key or guest grant
+ *   owner - write key only (delete box, rotate grants, decide requests)
  */
 export async function authorize(db, config, boxId, header, need) {
   const raw = parseBearer(header);
   if (!raw) throw errors.unauthorized();
 
-  if (need === "read" && !isReadKey(raw)) throw errors.unauthorized();
-  if (need === "write" && !isWriteKey(raw)) throw errors.unauthorized();
-
   const box = await db.prepare("SELECT * FROM boxes WHERE id = ?").get(boxId);
   if (!box) throw errors.unauthorized();
 
   const hashed = hashKey(raw);
-  const expected = need === "write" ? box.write_key_hash : box.read_key_hash;
-  if (hashed !== expected) throw errors.unauthorized();
+  let ok = false;
+  if (need === "read" && isReadKey(raw)) {
+    ok = safeEqualHex(hashed, box.read_key_hash);
+  } else if (need === "write" && isWriteKey(raw)) {
+    ok = safeEqualHex(hashed, box.write_key_hash);
+  } else if (need === "owner" && isWriteKey(raw)) {
+    ok = safeEqualHex(hashed, box.write_key_hash);
+  } else if ((need === "read" || need === "write") && isGrantKey(raw)) {
+    ok = (await findGrant(db, boxId, raw)) !== null;
+  }
+  if (!ok) throw errors.unauthorized();
 
   if (isExpired(box, config.retentionDays)) {
     try {

@@ -45,7 +45,9 @@ export default async function handler(req, res) {
       url: req.url,
       headers: req.headers,
       payload: raw || undefined,
+      rawRes: res,
     });
+    if (reply.hijacked) return; // route owns the socket (live stream)
     sendReply(res, reply);
   } catch (err) {
     res.statusCode = 500;

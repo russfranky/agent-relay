@@ -25,7 +25,7 @@ describe("healthz", { concurrency: false }, () => {
     await withApp({}, async (app) => {
       const res = await app.inject({ method: "GET", url: "/healthz" });
       assert.equal(res.statusCode, 200);
-      assert.deepEqual(res.json(), { ok: true, version: "0.1.0" });
+      assert.deepEqual(res.json(), { ok: true, version: "0.2.0" });
     });
   });
 });

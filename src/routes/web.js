@@ -1,5 +1,6 @@
 import { renderBoxPage, escapeHtml } from "../views/boxPage.js";
-import { renderLanding, renderCreated } from "../views/landing.js";
+import { renderLanding, renderCreated, renderDeleted } from "../views/landing.js";
+import { renderChatPage } from "../views/chat.js";
 import { parseBearer, authorize, clientIp } from "../auth.js";
 import { errors } from "../errors.js";
 import { hashKey } from "../keys.js";
@@ -123,11 +124,15 @@ export default async function webRoutes(app) {
     if (body.action !== "claim") {
       return renderLanding({ origin });
     }
-    const rawHandle = String(body.handle || "");
-    const checked = validateHandle(rawHandle);
+    const rawHandle = String(body.handle || "").trim();
     const title = String(body.title || "").slice(0, 120);
-    if (!checked.ok) {
-      return renderLanding({ origin, error: checked.message });
+    const payload = { title: title || undefined };
+    if (rawHandle !== "") {
+      const checked = validateHandle(rawHandle);
+      if (!checked.ok) {
+        return renderLanding({ origin, error: checked.message });
+      }
+      payload.handle = checked.handle;
     }
     let res;
     try {
@@ -135,16 +140,16 @@ export default async function webRoutes(app) {
         method: "POST",
         url: "/v1/boxes",
         headers: { "content-type": "application/json" },
-        payload: { handle: checked.handle, title: title || undefined },
+        payload,
       });
     } catch {
-      return renderLanding({ origin, error: "Could not claim that handle. Try again." });
+      return renderLanding({ origin, error: "Could not create the chat link. Try again." });
     }
     if (res.statusCode !== 201) {
-      let message = "Could not claim that handle. Try again.";
+      let message = "Could not create the chat link. Try again.";
       try {
         const errBody = res.json();
-        if (errBody?.error?.code === "conflict") message = "That handle is already taken. Pick another.";
+        if (errBody?.error?.code === "conflict") message = "That link name is already taken. Pick another.";
         else if (errBody?.error?.message) message = String(errBody.error.message);
       } catch {
         // keep generic message
@@ -158,7 +163,82 @@ export default async function webRoutes(app) {
       readKey: created.read_key,
       writeKey: created.write_key,
       title,
+      shareUrl: created.share_url,
     });
+  });
+
+  // Owner: issue a fresh invite link (the old one stops working).
+  app.post("/owner/rotate", async (req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    const origin = originOf(req);
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const boxId = String(body.box_id || "");
+    const writeKey = String(body.write_key || "");
+    const readKey = String(body.read_key || "");
+    const title = String(body.title || "").slice(0, 120);
+    if (!boxId || !writeKey) {
+      return renderLanding({ origin, error: "Missing chat or key." });
+    }
+    let res;
+    try {
+      res = await app.inject({
+        method: "POST",
+        url: `/v1/boxes/${encodeURIComponent(boxId)}/share/rotate`,
+        headers: {
+          authorization: `Bearer ${writeKey}`,
+          "content-type": "application/json",
+        },
+      });
+    } catch {
+      return renderLanding({ origin, error: "Could not make a new link. Try again." });
+    }
+    if (res.statusCode !== 200) {
+      return renderLanding({ origin, error: "Could not make a new link. The chat may be gone." });
+    }
+    return renderCreated({
+      origin,
+      boxId,
+      readKey,
+      writeKey,
+      title,
+      shareUrl: res.json().share_url,
+    });
+  });
+
+  // Owner: delete the chat.
+  app.post("/owner/delete", async (req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    const origin = originOf(req);
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const boxId = String(body.box_id || "");
+    const writeKey = String(body.write_key || "");
+    if (!boxId || !writeKey) {
+      return renderLanding({ origin, error: "Missing chat or key." });
+    }
+    try {
+      await app.inject({
+        method: "DELETE",
+        url: `/v1/boxes/${encodeURIComponent(boxId)}`,
+        headers: { authorization: `Bearer ${writeKey}` },
+      });
+    } catch {
+      return renderLanding({ origin, error: "Could not delete the chat. Try again." });
+    }
+    return renderDeleted({ boxId });
+  });
+
+  // Human chat page. No auth at page level: the grant travels in the URL
+  // fragment, which the browser never sends to the server.
+  app.get("/c/:box_id", async (req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderChatPage({ boxId: req.params.box_id });
+  });
+
+  // Chat metadata for the chat page (title). Requires the share grant: a
+  // chat title is private to the people holding the invite link.
+  app.get("/c/:box_id/info", async (req, reply) => {
+    const box = await authorize(db, config, req.params.box_id, req.headers.authorization, "read");
+    return { box_id: box.id, title: box.title || null };
   });
 
   app.get("/b/:box_id", async (req, reply) => {

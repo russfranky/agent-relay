@@ -106,7 +106,7 @@ export default async function requestRoutes(app) {
 
   async function decide(req, reply, toStatus) {
     checkWriteRateLimit(app, req, reply);
-    const box = await authorize(db, config, req.params.box_id, req.headers.authorization, "write");
+    const box = await authorize(db, config, req.params.box_id, req.headers.authorization, "owner");
     const reqId = Number(req.params.req_id);
     if (!Number.isInteger(reqId) || reqId <= 0) throw errors.validation("req_id must be a positive integer");
     const row = await db

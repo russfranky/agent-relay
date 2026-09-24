@@ -9,6 +9,7 @@ import healthRoutes from "./routes/health.js";
 import boxRoutes from "./routes/boxes.js";
 import messageRoutes from "./routes/messages.js";
 import requestRoutes from "./routes/requests.js";
+import streamRoutes from "./routes/stream.js";
 import webRoutes from "./routes/web.js";
 
 export async function buildApp(overrides = {}) {
@@ -45,6 +46,7 @@ export async function buildApp(overrides = {}) {
   await app.register(boxRoutes);
   await app.register(messageRoutes);
   await app.register(requestRoutes);
+  await app.register(streamRoutes);
   await app.register(webRoutes);
 
   const stopSweep = startSweeper(db, config, app.log);

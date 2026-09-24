@@ -90,17 +90,17 @@ describe("custom handles", { concurrency: false }, () => {
 });
 
 describe("landing page", { concurrency: false }, () => {
-  it("GET / renders the claim form", async () => {
+  it("GET / renders the chat link form", async () => {
     await withApp({}, async (app) => {
       const res = await app.inject({ method: "GET", url: "/" });
       assert.equal(res.statusCode, 200);
       assert.match(res.headers["content-type"], /text\/html/);
-      assert.match(res.body, /claim your handle/i);
+      assert.match(res.body, /make your chat link/i);
       assert.ok(res.body.includes('data-testid="claim-form"'));
     });
   });
 
-  it("POST / claims a handle and shows the keys once", async () => {
+  it("POST / creates a chat and shows the share link once", async () => {
     await withApp({}, async (app) => {
       const res = await app.inject({
         method: "POST",
@@ -111,8 +111,23 @@ describe("landing page", { concurrency: false }, () => {
       assert.equal(res.statusCode, 200);
       assert.ok(res.body.includes('data-testid="read-key"'));
       assert.ok(res.body.includes('data-testid="write-key"'));
-      assert.ok(res.body.includes("/b/webhandle1"));
+      assert.ok(res.body.includes('data-testid="share-url"'));
+      assert.match(res.body, /\/c\/webhandle1#g=gt_/);
       assert.ok(res.body.includes('data-testid="agent-snippet"'));
+    });
+  });
+
+  it("POST / without a handle generates a random link name", async () => {
+    await withApp({}, async (app) => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        payload: "action=claim&title=No+Handle+Box",
+      });
+      assert.equal(res.statusCode, 200);
+      assert.ok(res.body.includes('data-testid="share-url"'));
+      assert.match(res.body, /\/c\/[a-z]+-[a-z]+-\d+#g=gt_/);
     });
   });
 

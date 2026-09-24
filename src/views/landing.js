@@ -53,11 +53,22 @@ const CSS = `
       margin: 0.5rem 0.4rem 0 0;
     }
     button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+    button.danger { background: var(--stamp); }
     .steps { padding-left: 1.2rem; }
     .steps li { margin: 0.35rem 0; }
     .banner { padding: 0.6rem 0.75rem; border: 1px solid var(--ink); margin: 0 0 1rem; }
     .banner.error { border-color: var(--stamp); color: var(--stamp); }
     .banner.ok { border-color: var(--moss); color: var(--moss); }
+    .sharebox {
+      display: flex;
+      gap: 0.5rem;
+      margin: 0.75rem 0;
+    }
+    .sharebox input {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.8rem;
+    }
+    .sharebox button { margin: 0; white-space: nowrap; }
     .keyrow {
       display: flex;
       justify-content: space-between;
@@ -80,6 +91,8 @@ const CSS = `
       font-size: 0.78rem;
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
     }
+    details.owner { margin-top: 1rem; }
+    details.owner summary { cursor: pointer; font-size: 0.9rem; color: var(--muted); }
     a { color: var(--ink); }
     footer { color: var(--muted); font-size: 0.8rem; padding: 2rem 1.25rem; text-align: center; }
     .hint { color: var(--muted); font-size: 0.85rem; }
@@ -98,12 +111,12 @@ function shell(title, bodyHtml) {
 <body>
   <header class="mast">
     <h1>agent-relay</h1>
-    <div class="brand">shared mailbox for agents</div>
+    <div class="brand">private chat links</div>
   </header>
   <main>
     ${bodyHtml}
   </main>
-  <footer>No accounts. Handles and keys are shown only at creation. DELETE is irreversible.</footer>
+  <footer>Links are private to whoever holds them. Chats expire after 30 days without a message.</footer>
 </body>
 </html>`;
 }
@@ -113,69 +126,123 @@ export function renderLanding({ origin = "", error = null } = {}) {
     ? `<p class="banner error" data-testid="error" role="alert">${escapeHtml(error)}</p>`
     : "";
   const body = `
-    <p class="label">a shared mailbox for ai agents</p>
-    <h2 class="title">Claim a handle. Share it. Get notes.</h2>
+    <p class="label">private chat links</p>
+    <h2 class="title">Make a link. Send it. Start talking.</h2>
     ${errorHtml}
     <div class="panel">
       <p class="label">how it works</p>
       <ol class="steps">
-        <li><strong>Claim a handle</strong> below, for example <code>russ</code>. It becomes your mailbox address: <code>${escapeHtml(origin)}/b/russ</code>.</li>
-        <li><strong>Share the handle</strong> with the other agent, plus your read and write keys (shown once, right after you claim it).</li>
-        <li><strong>Approve connection requests</strong> on your mailbox page. Anyone who knows your handle can ask to connect; nothing lands until you approve.</li>
+        <li><strong>Make a chat link</strong> below and give it a name.</li>
+        <li><strong>Send the link</strong> to your buddy by text or email. They open it, pick a name, and you are talking.</li>
+        <li><strong>No accounts, no app to install.</strong> Messages appear live for everyone in the chat.</li>
       </ol>
-      <p class="hint">No accounts, no email, no push. Boxes expire after 30 days without a write. Poll no more than once every 10 seconds.</p>
+      <p class="hint">Anyone with the link can read and write, so share it like you would a private photo album. Chats expire after 30 days without a message.</p>
     </div>
     <form method="post" action="/" class="panel" data-testid="claim-form">
       <input type="hidden" name="action" value="claim">
-      <p class="label">claim your handle</p>
-      <label for="handle">Handle</label>
-      <input id="handle" name="handle" maxlength="32" required
-             placeholder="russ" pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]"
+      <p class="label">make your chat link</p>
+      <label for="title">Chat name (optional)</label>
+      <input id="title" name="title" maxlength="120" placeholder="e.g. Russ and Sam">
+      <label for="handle">Link name (optional)</label>
+      <input id="handle" name="handle" maxlength="32"
+             placeholder="e.g. russ-chat (leave blank for a random one)"
+             pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]"
              title="3-32 characters: lowercase letters, digits, hyphens">
       <p class="hint">3 to 32 characters. Lowercase letters, digits, and hyphens only. First come, first served.</p>
-      <label for="title">Label (optional)</label>
-      <input id="title" name="title" maxlength="120" placeholder="Russ's drop box">
-      <button type="submit">Claim handle</button>
+      <button type="submit">Create chat link</button>
     </form>
-    <p class="hint">Prefer the API? <code>POST ${escapeHtml(origin)}/v1/boxes</code> with JSON <code>{"handle":"russ"}</code> returns your keys. Full agent instructions ship with the repo.</p>
+    <p class="hint">Connecting an AI agent instead? The API is documented in the repo. Agents can also join any chat with its read and write keys.</p>
   `;
   return shell("agent-relay", body);
 }
 
-export function renderCreated({ origin = "", boxId, readKey, writeKey, title = "" }) {
+export function renderCreated({
+  origin = "",
+  boxId,
+  readKey,
+  writeKey,
+  title = "",
+  shareUrl,
+}) {
   const safeId = escapeHtml(boxId);
-  const boxUrl = `${origin}/b/${encodeURIComponent(boxId)}`;
+  const fullShare = `${origin}${shareUrl}`;
+  const chatUrl = `${origin}/c/${encodeURIComponent(boxId)}`;
   const snippet = [
-    `You are exchanging notes through agent-relay handle "${boxId}".`,
-    `Base URL: ${origin}`,
-    `Box id: ${boxId}`,
+    `Chat "${boxId}" on agent-relay.`,
+    `Share link (for humans): ${fullShare}`,
     `Read key: ${readKey}`,
     `Write key: ${writeKey}`,
     ``,
     `Send: POST /v1/boxes/${boxId}/messages with header "Authorization: Bearer <write_key>"`,
     `  and JSON {sender, body, client_msg_id, recipient?, reply_to?}`,
-    `Read:  GET /v1/boxes/${boxId}/messages?since=<cursor>&limit=50`,
-    `  with header "Authorization: Bearer <read_key>"`,
-    `Request a connection: POST /v1/boxes/${boxId}/requests`,
-    `  with JSON {from_handle, from_name?, note?} (no key needed)`,
-    `Poll at most every 10 seconds. Persist next_since. Always send a UUID v4 client_msg_id.`,
+    `Wait for replies without polling: GET /v1/boxes/${boxId}/messages?since=<cursor>&wait=25`,
+    `  with header "Authorization: Bearer <read_key>". The request holds up to`,
+    `  25 seconds and returns the moment a message lands.`,
+    `Live stream (browsers): GET /v1/boxes/${boxId}/stream?since=<cursor>`,
+    `  returns newline-delimited JSON until the server closes it; reconnect with cursor.`,
   ].join("\n");
   const body = `
-    <p class="banner ok" data-testid="created" role="status">Handle claimed. Save these keys now, they are shown only once.</p>
+    <p class="banner ok" data-testid="created" role="status">Chat link created. Send it to your buddy.</p>
     <div class="panel">
-      <p class="label">your mailbox</p>
-      <h2 class="title" data-testid="box-id">${safeId}</h2>
-      ${title ? `<p>${escapeHtml(title)}</p>` : ""}
-      <p><a href="${escapeHtml(boxUrl)}" data-testid="box-url">${escapeHtml(boxUrl)}</a></p>
-      <div class="keyrow"><span>Read key</span><code data-testid="read-key">${escapeHtml(readKey)}</code></div>
-      <div class="keyrow"><span>Write key</span><code data-testid="write-key">${escapeHtml(writeKey)}</code></div>
-      <p class="hint">Open the mailbox link and unlock it with the read key to see messages and approve connection requests.</p>
+      <p class="label">your chat link</p>
+      <h2 class="title" data-testid="box-id">${title ? escapeHtml(title) : safeId}</h2>
+      <div class="sharebox">
+        <input id="share-link" readonly value="${escapeHtml(fullShare)}" data-testid="share-url"
+               aria-label="Chat link" onclick="this.select()">
+        <button type="button" id="copy-btn">Copy</button>
+      </div>
+      <p class="hint">Text or email this link to your buddy. They open it, pick a name, and you are talking. The secret part lives after the <code>#</code>, so it never shows up in server logs.</p>
+      <p><a href="${escapeHtml(fullShare)}">Open the chat yourself</a></p>
     </div>
     <div class="panel">
       <p class="label">paste this into your agent</p>
       <pre class="snippet" data-testid="agent-snippet">${escapeHtml(snippet)}</pre>
     </div>
-    <p><a href="/">Claim another handle</a></p>
+    <details class="owner">
+      <summary>Owner controls and API keys</summary>
+      <div class="panel">
+        <div class="keyrow"><span>Read key</span><code data-testid="read-key">${escapeHtml(readKey)}</code></div>
+        <div class="keyrow"><span>Write key</span><code data-testid="write-key">${escapeHtml(writeKey)}</code></div>
+        <p class="hint">Keys are shown only once. Save them if an agent will join this chat.</p>
+        <form method="post" action="/owner/rotate">
+          <input type="hidden" name="box_id" value="${safeId}">
+          <input type="hidden" name="read_key" value="${escapeHtml(readKey)}">
+          <input type="hidden" name="write_key" value="${escapeHtml(writeKey)}">
+          <input type="hidden" name="title" value="${escapeHtml(title)}">
+          <button type="submit" class="ghost">Get a new invite link</button>
+          <p class="hint">The old link stops working immediately. Use this if a link leaks.</p>
+        </form>
+        <form method="post" action="/owner/delete" onsubmit="return confirm('Delete this chat forever?');">
+          <input type="hidden" name="box_id" value="${safeId}">
+          <input type="hidden" name="write_key" value="${escapeHtml(writeKey)}">
+          <button type="submit" class="danger">Delete this chat</button>
+        </form>
+      </div>
+    </details>
+    <p><a href="/">Make another chat link</a></p>
+    <script>
+      document.getElementById("copy-btn").addEventListener("click", function () {
+        var el = document.getElementById("share-link");
+        el.select();
+        var done = function (ok) {
+          var btn = document.getElementById("copy-btn");
+          btn.textContent = ok ? "Copied" : "Copy";
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(el.value).then(function () { done(true); }, function () { done(false); });
+        } else {
+          try { done(document.execCommand("copy")); } catch (e) { done(false); }
+        }
+      });
+    </script>
   `;
-  return shell(`handle ${boxId} claimed`, body);
+  return shell(`chat ${boxId} created`, body);
+}
+
+export function renderDeleted({ boxId }) {
+  const body = `
+    <p class="banner ok" role="status">Chat <strong>${escapeHtml(boxId)}</strong> was deleted. Its link no longer works.</p>
+    <p><a href="/">Make a new chat link</a></p>
+  `;
+  return shell("chat deleted", body);
 }

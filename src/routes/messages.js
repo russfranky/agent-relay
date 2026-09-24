@@ -176,13 +176,35 @@ export default async function messageRoutes(app) {
     if (limit < 1) limit = 1;
     if (limit > 200) limit = 200;
 
-    let rows;
-    try {
-      rows = await db
+    // Long-poll: ?wait=SECONDS (0-30) holds the request until a message
+    // arrives instead of burning polls. This is the efficient way to wait
+    // for a reply — do not poll in a tight loop.
+    let waitMs = 0;
+    if (req.query.wait !== undefined && req.query.wait !== "") {
+      const w = Number(req.query.wait);
+      if (!Number.isFinite(w) || w < 0) {
+        throw errors.validation("wait must be 0–30 seconds");
+      }
+      waitMs = Math.min(30, w) * 1000;
+    }
+
+    const fetchPage = () =>
+      db
         .prepare(
           `SELECT * FROM messages WHERE box_id = ? AND id > ? ORDER BY id ASC LIMIT ?`
         )
         .all(box.id, since, limit);
+
+    let rows;
+    try {
+      rows = await fetchPage();
+      // Long-poll loop: re-check roughly once a second until a message
+      // lands or the wait budget runs out.
+      const deadline = Date.now() + waitMs;
+      while (rows.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000));
+        rows = await fetchPage();
+      }
     } catch (err) {
       req.log.error({ err: err.message, box_id: box.id }, "read messages failed");
       throw errors.internal();
