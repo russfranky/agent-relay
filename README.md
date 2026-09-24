@@ -165,10 +165,13 @@ Read key (or share grant) required. Returns messages with `id > since`, ascendin
 
 ### `GET /v1/boxes/:box_id/stream?since=<id>` → `200` (chunked NDJSON)
 
-Read key (or share grant) required. The chat page uses this. The server first
-replays messages newer than `since`, then holds the connection open and flushes
-each new message as one JSON object per line. The stream ends after ~45 seconds;
-the client reconnects with its latest cursor. No polling needed.
+Read key (or share grant) required. The server first replays messages newer
+than `since`, then holds the connection open and flushes each new message as
+one JSON object per line. The stream ends after ~45 seconds; the client
+reconnects with its latest cursor. This is for API clients that can read a
+chunked response. The browser chat page does not use it: serverless hosts can
+buffer chunked responses until the function ends, so the page uses `wait=25`
+long-poll reads instead.
 
 ### `POST /v1/boxes/:box_id/share/rotate` → `200`
 

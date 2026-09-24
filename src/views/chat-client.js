@@ -1,7 +1,11 @@
 // Chat client for /c/:box_id. No build step, no dependencies.
 // Reads the share grant from the URL fragment (#g=...), so the secret
-// never reaches server logs. One fetch stream stays open; the server
-// pushes new messages as newline-delimited JSON. Reconnects with backoff.
+// never reaches server logs. Reads use wait=25 long-poll: the server
+// holds each request until a message lands (or 25s pass), so this is
+// one request per reply, not a polling loop. Reconnects with backoff.
+// (The NDJSON /stream endpoint exists for API clients, but serverless
+// hosts buffer chunked responses until the function ends, so browsers
+// must not rely on it for live delivery.)
 (function () {
   "use strict";
 
@@ -152,51 +156,40 @@
 
   var backoffMs = 1000;
 
-  async function streamForever() {
+  // Long-poll read loop. Each request is held by the server until a
+  // message lands (wait=25) or the window expires, so an idle chat costs
+  // about one request per 25s and a new message arrives within ~1s.
+  async function pollForever() {
     for (;;) {
       try {
         setStatus("connecting", "Connecting…");
-        var res = await fetch(
+        var res = await api(
           "/v1/boxes/" +
             encodeURIComponent(boxId) +
-            "/stream?since=" +
-            cursor,
-          { headers: { Authorization: "Bearer " + grant } }
+            "/messages?since=" +
+            cursor +
+            "&wait=25&limit=200",
+          { headers: authHeaders() }
         );
-        if (res.status === 401 || res.status === 410) {
+        var data = await res.json();
+        var msgs = data.messages || [];
+        if (typeof data.next_since === "number" && data.next_since > cursor) {
+          cursor = data.next_since;
+        }
+        msgs.forEach(appendMsg);
+        setStatus("live", "Live");
+        backoffMs = 1000;
+      } catch (e) {
+        if (e && e.gone) {
           showFatal("This chat link is wrong, or the chat was deleted.");
           return;
         }
-        if (!res.ok || !res.body) throw new Error("stream failed");
-        setStatus("live", "Live");
-        backoffMs = 1000;
-        var reader = res.body.getReader();
-        var decoder = new TextDecoder();
-        var buf = "";
-        for (;;) {
-          var chunk = await reader.read();
-          if (chunk.done) break;
-          buf += decoder.decode(chunk.value, { stream: true });
-          var idx;
-          while ((idx = buf.indexOf("\n")) !== -1) {
-            var line = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 1);
-            if (!line) continue;
-            try {
-              appendMsg(JSON.parse(line));
-            } catch (e) {
-              // ignore malformed line
-            }
-          }
-        }
-      } catch (e) {
-        // fall through to reconnect
+        setStatus("reconnecting", "Reconnecting…");
+        await new Promise(function (r) {
+          setTimeout(r, backoffMs);
+        });
+        backoffMs = Math.min(backoffMs * 2, 10000);
       }
-      setStatus("reconnecting", "Reconnecting…");
-      await new Promise(function (r) {
-        setTimeout(r, backoffMs);
-      });
-      backoffMs = Math.min(backoffMs * 2, 10000);
     }
   }
 
@@ -225,7 +218,7 @@
     loadHistory()
       .then(function () {
         form.addEventListener("submit", onSend);
-        streamForever();
+        pollForever();
       })
       .catch(function (e) {
         if (e && e.gone) {

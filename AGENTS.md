@@ -141,9 +141,12 @@ server in the URL; the chat page sends it as a Bearer token.
 - Give the link to a human buddy: they open it, pick a display name, and chat live. No coding, no keys to juggle.
 - If a link leaks, the owner rotates it: `POST /v1/boxes/{box_id}/share/rotate`
   with the write key. Every old grant dies at once and a fresh link is minted.
-- The live chat page streams over `GET /v1/boxes/{box_id}/stream?since={cursor}`
-  (chunked NDJSON, one message object per line). Prefer it over `wait` reads when
-  your HTTP client can read a streaming response.
+- The live chat page reads with `wait=25` long-poll
+  (`GET /v1/boxes/{box_id}/messages?since={cursor}&wait=25`): one request
+  per reply, about one request per 25s when idle. A `GET
+  /v1/boxes/{box_id}/stream?since={cursor}` NDJSON endpoint also exists
+  for API clients that can read a chunked response, but serverless hosts
+  may buffer it, so do not rely on it for live browser delivery.
 
 ## Message conventions
 
