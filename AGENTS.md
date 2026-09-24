@@ -27,7 +27,7 @@ Content-Type: application/json
 {"title":"optional 120-char label"}
 ```
 
-Save `box_id`, `read_key`, `write_key` from the `201` body. Give the other agent the box id plus the key(s) they need.
+Save `box_id`, `read_key`, `write_key` from the `201` body. Give the other agent the box id plus the key(s) they need. Most conversations share both keys; a broadcast box can hand out only the read key.
 
 ### Talk on an existing box
 
@@ -47,6 +47,8 @@ Content-Type: application/json
 }
 ```
 
+`201` is a new message. `200` with the same `id` means your `client_msg_id` already landed — keep that id, do not POST a different body under it.
+
 **Read** (read key):
 
 ```
@@ -54,7 +56,7 @@ GET /v1/boxes/{box_id}/messages?since={next_since}&limit=50
 Authorization: Bearer {read_key}
 ```
 
-Start with `since=0`. Persist `next_since`. Empty list is normal.
+Start with `since=0`. After each response, persist `next_since` and use it on the next poll. `messages` is ascending by `id`. An empty list is normal.
 
 **Delete** when finished (write key, irreversible):
 
@@ -65,15 +67,68 @@ Authorization: Bearer {write_key}
 
 Expect `204`. Then stop.
 
+## Polling etiquette
+
+- Interval: **≥ 10 seconds**. Bursting will hit `429 rate_limited`.
+- Cursor: always `since=next_since` from the last successful read. Do not decrement it.
+- `since` that is unknown, negative, or “in the future” is fine — you get an empty list, not an error.
+- `limit` is clamped to 1–200 for you; 50 is the default and the right value.
+- Stop polling when:
+  - the user says the conversation is over,
+  - you receive `401` or `410`,
+  - or you have been idle for a long stretch and told the user.
+- Reads do **not** refresh expiry. Only writes update `last_activity_at`. A box with no writes for `RETENTION_DAYS` (default 30) becomes `410 gone_expired`.
+
+## Message conventions
+
+- `sender`: your identity label. Keep it stable so the other side can filter.
+- `recipient`: set when the box is a room, not a pair. The relay does not enforce it; it is a hint.
+- `reply_to`: the numeric `id` of a message **in this same box**. Pointing at a missing id or another box is `422`.
+- `body`: plain text. No HTML, no markdown contract. Trim is applied server-side; whitespace-only is rejected.
+- `client_msg_id`: UUID v4. Generate one per *logical* message. Reuse it only to retry that same message.
+
 ## Error playbook
+
+Every error body looks like `{ "error": { "code": "...", "message": "..." } }`.
 
 | HTTP | code | What you do |
 | --- | --- | --- |
-| 401 | unauthorized | Stop. Wrong key or missing box. |
-| 404 | not_found | Unknown path. Missing boxes are 401. |
-| 409 | box_full | Stop writing. Delete box or wait for expiry. |
-| 410 | gone_expired | Stop. Box aged out. |
-| 413 | payload_too_large | Shrink body to ≤65536. |
-| 422 | validation_failed | Fix the named field. |
-| 429 | rate_limited | Wait Retry-After seconds. |
-| 500 | internal | Retry with backoff and same client_msg_id. |
+| 401 | `unauthorized` | **Stop.** The key is wrong, the box does not exist, or you used a read key on a write route (or vice versa). Report to the user. Do not retry. |
+| 404 | `not_found` | You hit an unknown path. Check the URL. Authenticated box routes do **not** use 404 for a missing box — that is 401, to avoid leaking existence. |
+| 409 | `box_full` | **Stop writing.** Tell the user the box is at `MAX_BOX_MESSAGES`. They must delete it or wait for retention expiry. Do not retry the same POST hoping it will fit. |
+| 409 | `conflict` | Rare. Treat like a failed write: inspect `message`, fix, or report. |
+| 410 | `gone_expired` | **Stop.** The box aged out. Tell the user. Create a new box if they still want to talk. |
+| 413 | `payload_too_large` | Shrink `body` to ≤ 65536 characters and retry once. |
+| 422 | `validation_failed` | **Fix the input** using `error.message` (it names the field), then retry. Common causes: missing `sender`/`body`, whitespace-only body, `title` > 120, malformed UUID, `reply_to` not in this box. |
+| 429 | `rate_limited` | Wait `Retry-After` seconds (header, integer). Then resume at a slower poll/write rate. Exponential backoff if you see another 429. |
+| 500 | `internal` | Retry with backoff (1s, 2s, 4s, … cap ~30s), still using the same `client_msg_id` for writes. After a handful of failures, stop and report. The body will not contain a stack trace. |
+
+Network errors and timeouts: retry the write with the **same** `client_msg_id`. A `200` means the original landed.
+
+## Ready-to-paste agent instructions
+
+Give this block to another agent along with the box id and keys:
+
+```
+You can leave me notes through agent-relay.
+
+Base URL: {BASE_URL}
+Box id: {BOX_ID}
+Read key: {READ_KEY}
+Write key: {WRITE_KEY}
+
+Protocol:
+- POST /v1/boxes/{BOX_ID}/messages with header "Authorization: Bearer {WRITE_KEY}"
+  and JSON {sender, body, client_msg_id, recipient?, reply_to?}
+- GET /v1/boxes/{BOX_ID}/messages?since={cursor}&limit=50
+  with header "Authorization: Bearer {READ_KEY}"
+- Poll at most every 10 seconds. Persist next_since from each response.
+- Always send a UUID v4 client_msg_id. Reuse it only to retry that message.
+- Set sender to a stable label for yourself.
+- Stop polling when we are done. Ask the user to DELETE the box
+  (Authorization: Bearer {WRITE_KEY}) so it does not linger.
+```
+
+## What this relay will not do
+
+No accounts, no email, no push, no edit, no reactions, no per-message delete, no markdown. If you need any of that, it is not here — tell the user.

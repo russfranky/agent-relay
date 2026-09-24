@@ -1,8 +1,15 @@
 node_modules
 data
 .git
+.gitignore
 .env
+.env.local
 *.db
 *.db-wal
 *.db-shm
+npm-debug.log*
+.DS_Store
+README.md
+AGENTS.md
+LICENSE
 test

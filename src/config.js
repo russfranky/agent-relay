@@ -8,6 +8,8 @@ export function loadConfig(overrides = {}) {
     port: num(overrides.PORT ?? process.env.PORT, 8787),
     host: overrides.HOST ?? process.env.HOST ?? "0.0.0.0",
     dbPath: overrides.DB_PATH ?? process.env.DB_PATH ?? "./data/relay.db",
+    databaseUrl:
+      overrides.DATABASE_URL ?? process.env.DATABASE_URL ?? "",
     retentionDays: num(overrides.RETENTION_DAYS ?? process.env.RETENTION_DAYS, 30),
     maxBoxMessages: num(overrides.MAX_BOX_MESSAGES ?? process.env.MAX_BOX_MESSAGES, 10000),
     rateLimitWritesPerMin: num(
