@@ -75,7 +75,7 @@ function renderRequests(requests, boxId, readKey, writeKey) {
         : "";
       const rid = escapeHtml(String(r.id));
       return `<div class="req" data-testid="request" data-req-id="${rid}">
-  <div class="req-head"><span class="who"><span class="sender">${escapeHtml(r.from_handle)}</span>${name}</span>
+  <div class="req-head"><span class="sender">${escapeHtml(r.from_handle)}</span>${name}
   <time datetime="${escapeHtml(r.created_at)}" data-ts="${escapeHtml(r.created_at)}">${escapeHtml(r.created_at)}</time></div>
   ${note}
   <div class="row">
@@ -222,8 +222,7 @@ export function renderBoxPage({
       font-size: 0.98rem;
     }
     .req { border-top: 1px solid var(--rule); padding: 0.6rem 0; }
-    .req-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.2rem 0.75rem; font-size: 0.88rem; align-items: baseline; }
-    .req-head .who { min-width: 0; overflow-wrap: anywhere; }
+    .req-head { display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.88rem; align-items: baseline; }
     .req-note { margin: 0.3rem 0; font-size: 0.95rem; white-space: pre-wrap; word-break: break-word; }
     .muted { color: var(--muted); }
     .hint { color: var(--muted); font-size: 0.85rem; font-weight: normal; }
@@ -361,7 +360,7 @@ export function renderBoxPage({
       var note = r.note ? '<p class="req-note">' + escapeHtml(r.note) + "</p>" : "";
       var rid = escapeHtml(String(r.id));
       return '<div class="req" data-testid="request" data-req-id="' + rid + '">' +
-        '<div class="req-head"><span class="who"><span class="sender">' + escapeHtml(r.from_handle) + "</span>" + name + "</span>" +
+        '<div class="req-head"><span><span class="sender">' + escapeHtml(r.from_handle) + "</span>" + name + "</span>" +
         '<time datetime="' + escapeHtml(r.created_at) + '" data-ts="' + escapeHtml(r.created_at) + '">' +
         escapeHtml(r.created_at) + "</time></div>" +
         note +
