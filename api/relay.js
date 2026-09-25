@@ -1,4 +1,5 @@
 import { buildApp } from "../src/app.js";
+import { MAX_BODY_BYTES, sendPayloadTooLarge } from "../src/mini.js";
 
 // Vercel serverless entry point. The app instance (and its DB pool) is
 // cached at module scope so warm invocations reuse it.
@@ -38,7 +39,21 @@ export default async function handler(req, res) {
   try {
     const app = await getApp();
     const chunks = [];
-    for await (const c of req) chunks.push(c);
+    let bodyBytes = 0;
+    let tooLarge = false;
+    for await (const c of req) {
+      bodyBytes += c.length;
+      if (bodyBytes > MAX_BODY_BYTES) {
+        tooLarge = true;
+        break;
+      }
+      chunks.push(c);
+    }
+    if (tooLarge) {
+      try { req.destroy(); } catch { /* ignore */ }
+      sendPayloadTooLarge(res);
+      return;
+    }
     const raw = Buffer.concat(chunks).toString("utf8");
     const reply = await app.handle({
       method: req.method,

@@ -1,6 +1,19 @@
 import http from "node:http";
 import { URL } from "node:url";
 
+// Largest request body the server will buffer. The biggest legitimate
+// payload is a 64KB chat message plus JSON overhead; anything past 1MB is
+// abuse. Without a cap, one huge POST can exhaust the process memory.
+export const MAX_BODY_BYTES = 1024 * 1024;
+
+function bodyTooLarge(res) {
+  res.statusCode = 413;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify({ error: { code: "payload_too_large", message: "payload too large" } }));
+}
+
+export { bodyTooLarge as sendPayloadTooLarge };
+
 function pathToRegex(path) {
   const keys = [];
   const re = path.replace(/:([A-Za-z0-9_]+)/g, (_, k) => {
@@ -176,9 +189,14 @@ export function createApp() {
           await notFoundHandler(req, reply);
         } else {
           const m = url.pathname.match(match.regex);
-          match.keys.forEach((k, i) => {
-            req.params[k] = decodeURIComponent(m[i + 1]);
-          });
+          try {
+            match.keys.forEach((k, i) => {
+              req.params[k] = decodeURIComponent(m[i + 1]);
+            });
+          } catch {
+            await notFoundHandler(req, reply);
+            return reply;
+          }
           const result = await match.handler(req, reply);
           if (!reply.sent && result !== undefined) reply.send(result);
         }
@@ -212,7 +230,21 @@ export function createApp() {
       return new Promise((resolve, reject) => {
         const server = http.createServer(async (req, res) => {
           const chunks = [];
-          for await (const c of req) chunks.push(c);
+          let bodyBytes = 0;
+          let tooLarge = false;
+          for await (const c of req) {
+            bodyBytes += c.length;
+            if (bodyBytes > MAX_BODY_BYTES) {
+              tooLarge = true;
+              break;
+            }
+            chunks.push(c);
+          }
+          if (tooLarge) {
+            try { req.destroy(); } catch { /* ignore */ }
+            bodyTooLarge(res);
+            return;
+          }
           const raw = Buffer.concat(chunks).toString("utf8");
           const ct = (req.headers["content-type"] || "").split(";")[0].trim();
           let body;

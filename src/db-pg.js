@@ -101,19 +101,31 @@ function translateSql(sql) {
   return out;
 }
 
-// Normalize pg row values to match the SQLite store's shapes:
-// TIMESTAMPTZ -> ISO string, BIGINT/int8 count strings -> Number.
-function normalize(value) {
+// Normalize pg row values to match the SQLite store's shapes.
+// Integer columns (BIGINT identity ids, counts, retention_days) come back
+// from node-pg as strings and become Numbers. Every other column keeps its
+// pg type: TIMESTAMPTZ -> ISO string via Date, TEXT stays a string even when
+// it holds only digits. A message body of "007" must come back "007", not 7:
+// the old broad digit-regex corrupted phone numbers, zip codes, and any
+// all-digit text longer than 15 digits (precision loss).
+const INT_COLUMNS = new Set(["id", "reply_to", "retention_days", "n"]);
+
+function normalizeValue(key, value) {
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
+  if (typeof value === "string" && INT_COLUMNS.has(key) && /^-?\d+$/.test(value)) {
+    return Number(value);
+  }
   return value;
 }
 
 function normalizeRow(row) {
   const out = {};
-  for (const [k, v] of Object.entries(row)) out[k] = normalize(v);
+  for (const [k, v] of Object.entries(row)) out[k] = normalizeValue(k, v);
   return out;
 }
+
+// Exported for regression tests: pins the pg<->sqlite type contract.
+export { normalizeRow };
 
 // pg unique-violation -> the code the routes already handle.
 function mapError(err) {

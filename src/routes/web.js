@@ -30,7 +30,7 @@ export default async function webRoutes(app) {
       res = await app.inject({
         method: "POST",
         url: "/v1/boxes",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-forwarded-for": req.ip },
         payload: { title: title || undefined },
       });
     } catch {
@@ -77,6 +77,7 @@ export default async function webRoutes(app) {
         headers: {
           authorization: `Bearer ${writeKey}`,
           "content-type": "application/json",
+          "x-forwarded-for": req.ip,
         },
       });
     } catch {
@@ -109,7 +110,7 @@ export default async function webRoutes(app) {
       await app.inject({
         method: "DELETE",
         url: `/v1/boxes/${encodeURIComponent(boxId)}`,
-        headers: { authorization: `Bearer ${writeKey}` },
+        headers: { authorization: `Bearer ${writeKey}`, "x-forwarded-for": req.ip },
       });
     } catch {
       return renderLanding({ origin, error: "Could not delete the chat. Try again." });

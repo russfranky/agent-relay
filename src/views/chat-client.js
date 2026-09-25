@@ -3,9 +3,6 @@
 // never reaches server logs. Reads use wait=25 long-poll: the server
 // holds each request until a message lands (or 25s pass), so this is
 // one request per reply, not a polling loop. Reconnects with backoff.
-// (The NDJSON /stream endpoint exists for API clients, but serverless
-// hosts buffer chunked responses until the function ends, so browsers
-// must not rely on it for live delivery.)
 (function () {
   "use strict";
 
