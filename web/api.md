@@ -143,3 +143,7 @@ the web UI at `/app` implements the same flow in the browser via WebCrypto.
 - Message bodies: ciphertext ≤ 256 KB.
 - Sends: 30/min per (sender IP, recipient).
 - Inbox reads: max 500 messages per request; page with `?since={last_id}`.
+- Retention: the relay is a mailbox, not an archive — it keeps the newest
+  `RELAY_MAX_MSGS_PER_ADDRESS` messages per address (default 500) and sweeps
+  messages older than `RELAY_MSG_TTL_DAYS` days (default 30). Archive threads
+  client-side; the server deletes the rest.

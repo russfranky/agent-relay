@@ -50,6 +50,10 @@ export function openSqliteDb(dbPath) {
   );
   const getMessage = db.prepare("SELECT id, address FROM messages WHERE id = ?");
   const deleteMessage = db.prepare("DELETE FROM messages WHERE id = ?");
+  const pruneMessages = db.prepare(
+    "DELETE FROM messages WHERE address = ? AND id NOT IN (SELECT id FROM messages WHERE address = ? ORDER BY id DESC LIMIT ?)"
+  );
+  const sweepMessages = db.prepare("DELETE FROM messages WHERE created_at < ?");
 
   return {
     kind: "sqlite",
@@ -66,6 +70,10 @@ export function openSqliteDb(dbPath) {
     async listMessages(address, since) { return listMessages.all(address, since); },
     async getMessage(id) { return getMessage.get(id); },
     async deleteMessage(id) { deleteMessage.run(id); },
+    // Retention: keep only the newest `keepNewest` messages per address.
+    async pruneMessages(address, keepNewest) { pruneMessages.run(address, address, keepNewest); },
+    // Retention: delete messages older than an ISO timestamp (lazy sweep).
+    async sweepMessagesOlderThan(cutoffIso) { sweepMessages.run(cutoffIso); },
     // Test-only: raw row dump for the no-plaintext-at-rest check.
     async rawMessages() { return db.prepare("SELECT * FROM messages").all(); },
     close() { try { db.close(); } catch { /* already closed */ } },

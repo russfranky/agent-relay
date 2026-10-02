@@ -100,9 +100,11 @@ rate limiting on open send (429 + `retry-after`).
 ```
 src/server.js    HTTP API + static web/ serving
 src/db.js        SQLite schema (addresses, messages)
+src/db-pg.js     Postgres (Neon) adapter for serverless
 src/crypto.js    envelope crypto (node:crypto)
 src/keys.js      owner-token generation / hashing
-src/ratelimit.js sliding-window limiter
+src/ratelimit.js sliding-window limiter (local)
+src/ratelimit-pg.js shared Postgres limiter (serverless)
 web/             static web UI, dark theme (WebCrypto in app.js)
 bin/relay.js     CLI: keygen / register / send / inbox / read
 seed.mjs         demo fixtures (alice@relay <-> bob@relay)

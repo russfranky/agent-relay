@@ -116,6 +116,8 @@ export function createApp(options = {}) {
     sendLimit = 30,
     sendWindowMs = 60_000,
     limiter: limiterOpt = null,
+    maxMsgsPerAddress = Number(process.env.RELAY_MAX_MSGS_PER_ADDRESS || 500),
+    msgTtlDays = Number(process.env.RELAY_MSG_TTL_DAYS || 30),
   } = options;
 
   // db: async adapter ({getAddress, insertAddress, ...}). Defaults to SQLite.
@@ -256,6 +258,16 @@ export function createApp(options = {}) {
             body.ciphertext,
             nowIso()
           );
+          // Retention: bound per-address storage. Cap enforced on every send;
+          // TTL expiry swept probabilistically (no cron on serverless).
+          if (maxMsgsPerAddress > 0) {
+            try { await store.pruneMessages(address, maxMsgsPerAddress); }
+            catch (e) { console.error("prune error:", e); }
+          }
+          if (msgTtlDays > 0 && Math.random() < 0.02) {
+            const cutoff = new Date(Date.now() - msgTtlDays * 86400_000).toISOString();
+            store.sweepMessagesOlderThan(cutoff).catch((e) => console.error("sweep error:", e));
+          }
           return sendJson(res, 201, { id: Number(info.lastInsertRowid) });
         }
       }

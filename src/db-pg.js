@@ -71,6 +71,14 @@ export async function openPgDb(connectionString) {
     async deleteMessage(id) {
       await sql`DELETE FROM messages WHERE id = ${id}`;
     },
+    // Retention: keep only the newest `keepNewest` messages per address.
+    async pruneMessages(address, keepNewest) {
+      await sql`DELETE FROM messages WHERE address = ${address} AND id NOT IN (SELECT id FROM messages WHERE address = ${address} ORDER BY id DESC LIMIT ${keepNewest})`;
+    },
+    // Retention: delete messages older than an ISO timestamp (lazy sweep).
+    async sweepMessagesOlderThan(cutoffIso) {
+      await sql`DELETE FROM messages WHERE created_at < ${cutoffIso}`;
+    },
     close() { /* http driver holds no connection */ },
   };
 }
