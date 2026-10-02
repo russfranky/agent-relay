@@ -7,9 +7,7 @@ data
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 npm-debug.log*
 .DS_Store
-README.md
-AGENTS.md
-LICENSE
-test
+demo

@@ -1,5 +1,6 @@
 node_modules/
 data/
+demo/*.key.json
 *.db
 *.db-wal
 *.db-shm

@@ -1,223 +1,76 @@
-import { Pool } from "@neondatabase/serverless";
+// Postgres adapter (Neon serverless) with the same async interface as the
+// SQLite adapter in db.js. Used on Vercel, where the filesystem is ephemeral
+// and mailboxes must survive in a real database.
+import { neon } from "@neondatabase/serverless";
 
-// Postgres store with the same prepare()/transaction() shape as the
-// SQLite store in db.js, except get()/all()/run() return Promises.
-// Call sites use `await` uniformly; SQLite's sync values pass through await.
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS addresses (
+    address TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    owner_token_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 
-const PG_SCHEMA = `
-CREATE TABLE IF NOT EXISTS boxes (
-  id TEXT PRIMARY KEY,
-  read_key_hash TEXT NOT NULL,
-  write_key_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  last_activity_at TIMESTAMPTZ NOT NULL,
-  retention_days INTEGER,
-  title TEXT
-);
+  CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    address TEXT NOT NULL REFERENCES addresses(address) ON DELETE CASCADE,
+    sender TEXT NOT NULL,
+    ephemeral_pubkey TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    ciphertext TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 
-CREATE TABLE IF NOT EXISTS messages (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  box_id TEXT NOT NULL REFERENCES boxes(id) ON DELETE CASCADE,
-  client_msg_id TEXT,
-  sender TEXT NOT NULL,
-  recipient TEXT,
-  reply_to BIGINT REFERENCES messages(id) ON DELETE SET NULL,
-  body TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
-);
+  CREATE INDEX IF NOT EXISTS idx_messages_address ON messages(address, id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client
-  ON messages(box_id, client_msg_id)
-  WHERE client_msg_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_messages_box_id
-  ON messages(box_id, id);
-
-CREATE TABLE IF NOT EXISTS tombstones (
-  id TEXT PRIMARY KEY,
-  deleted_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS grants (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  box_id TEXT NOT NULL REFERENCES boxes(id) ON DELETE CASCADE,
-  label TEXT,
-  token_hash TEXT NOT NULL,
-  scope TEXT NOT NULL DEFAULT 'chat',
-  created_at TIMESTAMPTZ NOT NULL,
-  revoked_at TIMESTAMPTZ
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_grants_token
-  ON grants(token_hash);
-
-CREATE INDEX IF NOT EXISTS idx_grants_box
-  ON grants(box_id);
-
-CREATE INDEX IF NOT EXISTS idx_boxes_last_activity
-  ON boxes(last_activity_at);
+  CREATE TABLE IF NOT EXISTS rate_limits (
+    "key" TEXT PRIMARY KEY,
+    window_start BIGINT NOT NULL,
+    count INTEGER NOT NULL,
+    prev_count INTEGER NOT NULL
+  );
 `;
 
-// Translate SQLite `?` placeholders to Postgres `$1..$n`, skipping
-// `?` characters inside quoted string literals.
-function translatePlaceholders(sql) {
-  let n = 0;
-  let out = "";
-  let quote = null;
-  for (let i = 0; i < sql.length; i++) {
-    const c = sql[i];
-    if (quote) {
-      out += c;
-      if (c === quote) {
-        if (sql[i + 1] === quote) {
-          out += sql[i + 1];
-          i++;
-        } else {
-          quote = null;
-        }
-      }
-    } else if (c === "'" || c === '"') {
-      quote = c;
-      out += c;
-    } else if (c === "?") {
-      n++;
-      out += "$" + n;
-    } else {
-      out += c;
-    }
+export async function openPgDb(connectionString) {
+  if (!connectionString) throw new Error("DATABASE_URL is not set");
+  const sql = neon(connectionString);
+  // The neon http driver runs one statement per call; split the schema.
+  // (Plain-string calls must use sql.query, not the tagged-template form.)
+  for (const stmt of SCHEMA.split(";")) {
+    const s = stmt.trim();
+    if (s) await sql.query(s);
   }
-  return out;
-}
-
-// Rewrite the SQLite-isms this codebase uses.
-function translateSql(sql) {
-  let out = translatePlaceholders(sql);
-  // Only tombstones use INSERT OR REPLACE.
-  out = out.replace(/INSERT\s+OR\s+REPLACE\s+INTO\s+tombstones/i,
-    "INSERT INTO tombstones");
-  if (/INSERT\s+INTO\s+tombstones/i.test(out) && !/ON\s+CONFLICT/i.test(out)) {
-    out += " ON CONFLICT (id) DO UPDATE SET deleted_at = EXCLUDED.deleted_at";
-  }
-  return out;
-}
-
-// Normalize pg row values to match the SQLite store's shapes.
-// Integer columns (BIGINT identity ids, counts, retention_days) come back
-// from node-pg as strings and become Numbers. Every other column keeps its
-// pg type: TIMESTAMPTZ -> ISO string via Date, TEXT stays a string even when
-// it holds only digits. A message body of "007" must come back "007", not 7:
-// the old broad digit-regex corrupted phone numbers, zip codes, and any
-// all-digit text longer than 15 digits (precision loss).
-const INT_COLUMNS = new Set(["id", "reply_to", "retention_days", "n"]);
-
-function normalizeValue(key, value) {
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "string" && INT_COLUMNS.has(key) && /^-?\d+$/.test(value)) {
-    return Number(value);
-  }
-  return value;
-}
-
-function normalizeRow(row) {
-  const out = {};
-  for (const [k, v] of Object.entries(row)) out[k] = normalizeValue(k, v);
-  return out;
-}
-
-// Exported for regression tests: pins the pg<->sqlite type contract.
-export { normalizeRow };
-
-// pg unique-violation -> the code the routes already handle.
-function mapError(err) {
-  if (err && err.code === "23505") {
-    err.code = "SQLITE_CONSTRAINT_UNIQUE";
-  }
-  throw err;
-}
-
-export function openPg(connectionString) {
-  const pool = new Pool({ connectionString, max: 5 });
-  pool.on("error", () => {
-    // Idle client errors (e.g. DB auto-suspend) must not crash the process.
-  });
-
-  // Transaction client routing: prepare() is called fresh at each use
-  // site, so statements created inside db.transaction() see the tx
-  // client via this binding at execution time.
-  let txClient = null;
-  const target = () => txClient ?? pool;
-
-  function prepare(sql) {
-    const pgSql = translateSql(sql);
-    return {
-      async get(...params) {
-        try {
-          const r = await target().query(pgSql, params);
-          return r.rows.length ? normalizeRow(r.rows[0]) : undefined;
-        } catch (err) {
-          mapError(err);
-        }
-      },
-      async all(...params) {
-        try {
-          const r = await target().query(pgSql, params);
-          return r.rows.map(normalizeRow);
-        } catch (err) {
-          mapError(err);
-        }
-      },
-      async run(...params) {
-        try {
-          let q = pgSql;
-          if (/^\s*insert\s+/i.test(q) && !/returning\s+/i.test(q)) {
-            q += " RETURNING id";
-          }
-          const r = await target().query(q, params);
-          const row = r.rows[0];
-          return {
-            lastInsertRowid: row && row.id != null ? Number(row.id) : 0,
-            changes: typeof r.rowCount === "number" ? r.rowCount : 0,
-          };
-        } catch (err) {
-          mapError(err);
-        }
-      },
-    };
-  }
-
-  function transaction(fn) {
-    return async (...args) => {
-      const client = await pool.connect();
-      const prev = txClient;
-      txClient = client;
-      try {
-        await client.query("BEGIN");
-        const result = await fn(...args);
-        await client.query("COMMIT");
-        return result;
-      } catch (err) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {
-          // ignore
-        }
-        throw err;
-      } finally {
-        txClient = prev;
-        client.release();
-      }
-    };
-  }
-
   return {
-    prepare,
-    transaction,
-    isAsync: true,
-    async migrate() {
-      await pool.query(PG_SCHEMA);
+    kind: "pg",
+    // Raw query handle, used by the Postgres rate limiter (ratelimit-pg.js).
+    sql,
+    async getAddress(address) {
+      const rows = await sql`SELECT address, public_key, owner_token_hash, created_at FROM addresses WHERE address = ${address}`;
+      return rows[0];
     },
-    async close() {
-      await pool.end();
+    async insertAddress(address, publicKey, tokenHash, createdAt) {
+      await sql`INSERT INTO addresses (address, public_key, owner_token_hash, created_at) VALUES (${address}, ${publicKey}, ${tokenHash}, ${createdAt})`;
     },
+    async updatePubkey(publicKey, address) {
+      await sql`UPDATE addresses SET public_key = ${publicKey} WHERE address = ${address}`;
+    },
+    async deleteAddress(address) {
+      await sql`DELETE FROM addresses WHERE address = ${address}`;
+    },
+    async insertMessage(address, sender, ephPubkey, nonce, ciphertext, createdAt) {
+      const rows = await sql`INSERT INTO messages (address, sender, ephemeral_pubkey, nonce, ciphertext, created_at) VALUES (${address}, ${sender}, ${ephPubkey}, ${nonce}, ${ciphertext}, ${createdAt}) RETURNING id`;
+      return { lastInsertRowid: Number(rows[0].id) };
+    },
+    async listMessages(address, since) {
+      return await sql`SELECT id, sender AS from_addr, ephemeral_pubkey, nonce, ciphertext, created_at FROM messages WHERE address = ${address} AND id > ${since} ORDER BY id ASC LIMIT 500`;
+    },
+    async getMessage(id) {
+      const rows = await sql`SELECT id, address FROM messages WHERE id = ${id}`;
+      return rows[0];
+    },
+    async deleteMessage(id) {
+      await sql`DELETE FROM messages WHERE id = ${id}`;
+    },
+    close() { /* http driver holds no connection */ },
   };
 }
