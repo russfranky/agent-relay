@@ -3,8 +3,13 @@
 //   keygen    --out PATH            generate P-256 keypair (0600)
 //   register  --address a@relay [--key PATH] [--url URL]
 //   send      --to a@relay --subject S --body B [--from a@relay] [--thread T] [--key PATH] [--url URL]
-//   inbox     [--key PATH] [--url URL] [--address a@relay]
+//   inbox     [--key PATH] [--url URL] [--address a@relay] [--archive DIR]
 //   read      --id N [--keep] [--key PATH] [--url URL]
+//
+// --archive DIR: append fetched+decrypted messages to DIR/<address>.jsonl
+// (one JSON object per line). Ids already archived are skipped, so re-running
+// is safe. The archive holds plaintext — keep it private; it is your thread
+// history, independent of the relay's bounded server mailbox.
 //
 // Key file: ~/.relay/key.json by default, or RELAY_KEY env.
 // Server: http://127.0.0.1:8787 by default, or RELAY_URL env.
@@ -23,8 +28,12 @@ function usage(exitCode = 1) {
   keygen    --out PATH            generate a P-256 keypair (file mode 0600)
   register  --address NAME [--key PATH] [--url URL]
   send      --to NAME --subject S --body B [--from NAME] [--thread T] [--key PATH] [--url URL]
-  inbox     [--key PATH] [--url URL] [--address NAME]
+  inbox     [--key PATH] [--url URL] [--address NAME] [--archive DIR]
   read      --id N [--keep] [--key PATH] [--url URL]
+
+  --archive DIR appends fetched+decrypted messages to DIR/<address>.jsonl
+  (one JSON object per line, duplicates skipped). Your thread history,
+  independent of the relay's bounded server mailbox.
 
 Type a bare name ("scout") or the full address ("scout@relay").
 
@@ -91,6 +100,28 @@ async function api(url, method, p, body, token) {
 function fmtTime(iso) {
   const d = new Date(iso);
   return d.toLocaleString();
+}
+
+// Append decrypted messages to DIR/<address>.jsonl, one JSON object per line.
+// Ids already present are skipped so repeated fetches never duplicate.
+function archiveMessages(dir, address, items) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${address}.jsonl`);
+  const seen = new Set();
+  if (fs.existsSync(file)) {
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try { seen.add(JSON.parse(line).id); } catch { /* ignore bad lines */ }
+    }
+  }
+  const fresh = [];
+  for (const m of items) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    fresh.push(JSON.stringify(m));
+  }
+  if (fresh.length) fs.appendFileSync(file, fresh.join("\n") + "\n");
+  return { file, added: fresh.length };
 }
 
 async function main() {
@@ -164,6 +195,7 @@ async function main() {
         console.log(`inbox ${address}: empty`);
         return;
       }
+      const archived = [];
       for (const m of messages) {
         let dec;
         try {
@@ -176,6 +208,16 @@ async function main() {
         if (dec.thread_id) console.log(`thread: ${dec.thread_id}`);
         console.log(dec.body);
         console.log();
+        archived.push({
+          id: m.id, from: m.from, to: address,
+          subject: dec.subject, body: dec.body, thread_id: dec.thread_id || null,
+          created_at: m.created_at,
+        });
+      }
+      const archiveDir = args.archive || process.env.RELAY_ARCHIVE_DIR;
+      if (archiveDir) {
+        const { file, added } = archiveMessages(archiveDir, address, archived);
+        console.log(`archived ${added} new message(s) to ${file}`);
       }
       return;
     }

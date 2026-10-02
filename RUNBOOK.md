@@ -35,9 +35,32 @@ Explicit non-goals this pass: delete-on-fetch (needs client archive shipped firs
 - [x] M1: TTL sweep (lazy, probabilistic — no new infra on serverless)
 - [x] M1: tests (cap eviction, TTL expiry, defaults)
 - [x] M1: `npm test` green (40/40), Jev output-verify auto-pass (P92), docs updated
-- [ ] M1: deploy + live-verify cap on production
-- [ ] M2: CLI `--archive` flag, JSONL append, thread replay
-- [ ] M2: tests, deploy not needed (CLI-only), verify against production
+- [x] M1: deployed (dpl_HdRmUeZ3WUXFpYj5YfvrivrjJ8LS), live-verified new tree serving
+- [x] M2: CLI `--archive` flag, JSONL append, thread replay
+- [x] M2: tests (3/3), full suite 43/43, Jev output-verify auto-pass (P92); pushed to repo (CLI-only change — server tree identical to live deploy, no redeploy)
+## M3 sketch: relay-ledger (LATER — not built this pass)
+
+CORRECTION (2026-10-02, verified by reading thatmgmt source): there is NO Stripe
+card/bank integration in thatmgmt. No stripe npm package, no PaymentIntents /
+Checkout / Stripe-webhook code anywhere. The word "stripe" appears only in
+"Bridge (Stripe stablecoin rails)" — Bridge's USDC→ACH off-ramp API, which is
+gated OFF by default. Card top-ups would need to be built from scratch.
+What EXISTS and is reusable: Privy crypto top-ups (USDC on Base chain).
+
+Reusable for credits (with extraction):
+- `privy-deposit-sdk.ts` → `createPrivyDepositClient` (as-is): per-top-up deposit address
+- `privy-webhooks.ts` → `handlePrivyWebhookRequest` (pattern): Svix verify → normalize → idempotent reconcile
+- `privy-payments.ts` → `reconcilePrivyDeposit` (extract): deposit-observation → credit logic, drop the quote/cut/tenant coupling
+- `privy-server.ts` → composition pattern (fail-closed creds, injected pool)
+- `persistence/privy-payments-postgres.ts` → upsert pattern; NEW tables `credit_accounts`, `credit_topups`
+
+New logic (nothing in thatmgmt does metering): per-call balance compare-and-decrement
+keyed by the API key found in the decrypted message body. Integer micro-USDC
+throughout ($0.005/call = 5,000 micro-USDC, exactly representable).
+
+Not applicable: `privy-settlement.ts`, `bridge-client.ts` (fiat off-ramp — only if
+the operator ever cashes out accumulated USDC).
+
 - [ ] M3: ledger sketch from payments map (pending subagent)
 - [ ] M4: suite-doc
 - [ ] Final: full suite green, Jev verify, push repo, deploy, report
