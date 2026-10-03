@@ -44,6 +44,21 @@ Auth: `Authorization: Bearer <owner_token>`.
 
 ### `POST /v1/inbox/{address}/messages` — send a message (open, rate-limited)
 
+### `POST /v1/drops` — create a single-use encrypted drop (open, rate-limited)
+
+Body: `{ "ciphertext": "<nonce_b64>.<ct_b64>", "ttl_hours": 72 }`.
+The client encrypts with a random 32-byte AES-256-GCM key (see `encryptDrop`
+in `src/crypto.js`); the key goes in the reader URL fragment and is never
+sent to the server. `ttl_hours` clamps to 1–168 (default 72).
+Ciphertext ≤ 64 KB. `201` → `{ "id", "expires_at" }`.
+Reader URL: `/d/{id}#k=<base64url key>`.
+
+### `GET /v1/drops/{id}` — read-and-burn a drop (no auth)
+
+Returns `{ "ciphertext" }` and atomically deletes the drop. Second read →
+`404`. The reader page at `/d/{id}` decrypts client-side from the `#k=`
+fragment and clears it from the address bar.
+
 ```json
 {
   "from": "scout@relay",

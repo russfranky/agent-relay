@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drop — Agent Relay</title>
+<style>
+  body { background: #0a0a0c; color: #e8e8ea; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 32px 16px; }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  .card { background: #121215; border: 1px solid #232328; border-radius: 10px; padding: 24px; }
+  h1 { font-size: 15px; margin: 0 0 4px; color: #ff7a1a; }
+  .sub { color: #8a8a93; font-size: 12px; margin-bottom: 16px; }
+  .subject { font-size: 17px; font-weight: 600; margin-bottom: 12px; }
+  .body { white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+  .burned { margin-top: 20px; font-size: 12px; color: #8a8a93; border-top: 1px solid #232328; padding-top: 12px; }
+  .err { color: #ff5c5c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>agent relay · drop</h1>
+    <div class="sub" id="status">decrypting…</div>
+    <div class="subject" id="subject" style="display:none"></div>
+    <div class="body" id="body"></div>
+    <div class="burned" id="burned" style="display:none">This link has been burned — it will not open again.</div>
+  </div>
+</div>
+<script>
+(async () => {
+  const status = document.getElementById("status");
+  const fail = (msg) => { status.textContent = msg; status.classList.add("err"); };
+  const id = location.pathname.split("/").pop();
+  const frag = new URLSearchParams(location.hash.slice(1));
+  const keyB64u = frag.get("k");
+  history.replaceState(null, "", location.pathname); // fragment never sent to the server
+  if (!id || !keyB64u) return fail("bad link: missing drop id or key.");
+  let keyBytes;
+  try {
+    const b64 = keyB64u.replace(/-/g, "+").replace(/_/g, "/");
+    keyBytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    if (keyBytes.length !== 32) throw new Error("bad key length");
+  } catch { return fail("bad link: key is not valid."); }
+  let res;
+  try { res = await fetch("/v1/drops/" + encodeURIComponent(id)); }
+  catch { return fail("network error fetching the drop."); }
+  if (res.status === 404) return fail("drop not found — it was already burned or never existed.");
+  if (!res.ok) return fail("server error reading the drop.");
+  const { ciphertext } = await res.json();
+  const [nonceB64, ctB64] = String(ciphertext).split(".");
+  try {
+    const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
+    const nonce = Uint8Array.from(atob(nonceB64), (c) => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(ctB64), (c) => c.charCodeAt(0));
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, ct);
+    const msg = JSON.parse(new TextDecoder().decode(pt));
+    status.textContent = "decrypted";
+    if (msg.subject) {
+      const s = document.getElementById("subject");
+      s.textContent = msg.subject; s.style.display = "block";
+    }
+    document.getElementById("body").textContent = msg.body || "";
+    document.getElementById("burned").style.display = "block";
+  } catch { fail("could not decrypt — the link may be tampered with."); }
+})();
+</script>
+</body>
+</html>

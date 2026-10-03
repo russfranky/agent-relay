@@ -5,6 +5,7 @@
 //   send      --to a@relay --subject S --body B [--from a@relay] [--thread T] [--key PATH] [--url URL]
 //   inbox     [--key PATH] [--url URL] [--address a@relay] [--archive DIR]
 //   read      --id N [--keep] [--key PATH] [--url URL]
+//   drop      --body TEXT [--subject S] [--ttl HOURS] [--url URL]
 //
 // --archive DIR: append fetched+decrypted messages to DIR/<address>.jsonl
 // (one JSON object per line). Ids already archived are skipped, so re-running
@@ -16,7 +17,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { generateKeypair, encryptEnvelope, decryptEnvelope } from "../src/crypto.js";
+import crypto from "node:crypto";
+import { generateKeypair, encryptEnvelope, decryptEnvelope, encryptDrop } from "../src/crypto.js";
 import { normalizeAddress } from "../src/addresses.js";
 
 const DEFAULT_URL = process.env.RELAY_URL || "http://127.0.0.1:8787";
@@ -30,10 +32,14 @@ function usage(exitCode = 1) {
   send      --to NAME --subject S --body B [--from NAME] [--thread T] [--key PATH] [--url URL]
   inbox     [--key PATH] [--url URL] [--address NAME] [--archive DIR]
   read      --id N [--keep] [--key PATH] [--url URL]
+  drop      --body TEXT [--subject S] [--ttl HOURS] [--url URL]
 
   --archive DIR appends fetched+decrypted messages to DIR/<address>.jsonl
   (one JSON object per line, duplicates skipped). Your thread history,
   independent of the relay's bounded server mailbox.
+
+  drop creates a single-use encrypted link: the key stays in the URL
+  fragment (never sent to the server) and the link burns on first open.
 
 Type a bare name ("scout") or the full address ("scout@relay").
 
@@ -177,6 +183,24 @@ async function main() {
       ...env,
     });
     console.log(`sent to ${to} (id ${res.id})`);
+    return;
+  }
+
+  if (cmd === "drop") {
+    // Single-use encrypted drop: no address or key needed. The key lives in
+    // the URL fragment; the server stores only ciphertext and burns on read.
+    const body = args.body;
+    if (typeof body !== "string" || !body) usage();
+    const subject = typeof args.subject === "string" ? args.subject : undefined;
+    let ttlHours = args.ttl === undefined ? 72 : Number(args.ttl);
+    if (!Number.isFinite(ttlHours)) ttlHours = 72;
+    const keyBytes = crypto.randomBytes(32);
+    const ciphertext = encryptDrop(keyBytes, { subject, body });
+    const res = await api(url, "POST", "/v1/drops", { ciphertext, ttl_hours: ttlHours });
+    const base = url.replace(/\/+$/, "");
+    const dropUrl = `${base}/d/${res.id}#k=${keyBytes.toString("base64url")}`;
+    console.log(dropUrl);
+    console.log(`single-use link — burns on first open (expires ${res.expires_at}).`);
     return;
   }
 

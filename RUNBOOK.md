@@ -63,4 +63,11 @@ the operator ever cashes out accumulated USDC).
 
 - [ ] M3: ledger sketch from payments map (pending subagent)
 - [ ] M4: suite-doc
-- [ ] Final: full suite green, Jev verify, push repo, deploy, report
+## M5: relay-drop — single-use encrypted links (2026-10-03)
+
+- [x] Drop crypto (AES-256-GCM, 32-byte key in URL fragment, server blind)
+- [x] DB adapters: drops table, atomic burn-on-read, expiry sweep
+- [x] Server: POST /v1/drops (rate-limited), GET /v1/drops/:id (burn), /d/:id reader page
+- [x] CLI: `relay.js drop --body --subject --ttl`
+- [x] Tests 7/7, full suite 50/50, Jev output-verify auto-pass (P93), api.md documented
+- [ ] Deploy + live-verify drop create/burn on production

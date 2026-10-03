@@ -34,6 +34,13 @@ export function openSqliteDb(dbPath) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_address ON messages(address, id);
+
+    CREATE TABLE IF NOT EXISTS drops (
+      id TEXT PRIMARY KEY,
+      ciphertext TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
   `);
 
   const getAddress = db.prepare("SELECT address, public_key, owner_token_hash, created_at FROM addresses WHERE address = ?");
@@ -50,6 +57,11 @@ export function openSqliteDb(dbPath) {
   );
   const getMessage = db.prepare("SELECT id, address FROM messages WHERE id = ?");
   const deleteMessage = db.prepare("DELETE FROM messages WHERE id = ?");
+  const createDrop = db.prepare(
+    "INSERT INTO drops (id, ciphertext, created_at, expires_at) VALUES (?, ?, ?, ?)"
+  );
+  const burnDrop = db.prepare("DELETE FROM drops WHERE id = ? RETURNING ciphertext");
+  const sweepDrops = db.prepare("DELETE FROM drops WHERE expires_at < ?");
   const pruneMessages = db.prepare(
     "DELETE FROM messages WHERE address = ? AND id NOT IN (SELECT id FROM messages WHERE address = ? ORDER BY id DESC LIMIT ?)"
   );
@@ -74,6 +86,14 @@ export function openSqliteDb(dbPath) {
     async pruneMessages(address, keepNewest) { pruneMessages.run(address, address, keepNewest); },
     // Retention: delete messages older than an ISO timestamp (lazy sweep).
     async sweepMessagesOlderThan(cutoffIso) { sweepMessages.run(cutoffIso); },
+    // Single-use drops: burn-after-reading.
+    async createDrop(id, ciphertext, createdAt, expiresAt) {
+      createDrop.run(id, ciphertext, createdAt, expiresAt);
+    },
+    async burnDrop(id) {
+      return burnDrop.get(id) || null; // { ciphertext } or null
+    },
+    async sweepExpiredDrops(nowIsoStr) { sweepDrops.run(nowIsoStr); },
     // Test-only: raw row dump for the no-plaintext-at-rest check.
     async rawMessages() { return db.prepare("SELECT * FROM messages").all(); },
     close() { try { db.close(); } catch { /* already closed */ } },

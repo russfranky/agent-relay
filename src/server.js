@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { openSqliteDb, nowIso } from "./db.js";
 import { generateOwnerToken, hashToken, tokenMatches } from "./keys.js";
@@ -267,8 +268,66 @@ export function createApp(options = {}) {
           if (msgTtlDays > 0 && Math.random() < 0.02) {
             const cutoff = new Date(Date.now() - msgTtlDays * 86400_000).toISOString();
             store.sweepMessagesOlderThan(cutoff).catch((e) => console.error("sweep error:", e));
+            store.sweepExpiredDrops(nowIso()).catch((e) => console.error("drop sweep error:", e));
           }
           return sendJson(res, 201, { id: Number(info.lastInsertRowid) });
+        }
+      }
+
+      // ---- single-use drops: create (open, rate-limited) ----
+      {
+        const m = pathname.match(/^\/v1\/drops$/);
+        if (m && method === "POST") {
+          const rl = await limiter.hit(`drop:${clientIp(req)}`, sendLimit, sendWindowMs);
+          if (!rl.ok) {
+            return sendJson(
+              res,
+              429,
+              { error: { code: "rate_limited", message: "too many drops, slow down" } },
+              { "retry-after": String(rl.retryAfter) }
+            );
+          }
+          const body = await readJsonBody(req);
+          const ct = body.ciphertext;
+          if (typeof ct !== "string" || !/^[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/.test(ct)) {
+            return err(res, 400, "invalid_drop", "ciphertext must be nonce_b64.ciphertext_b64");
+          }
+          if (Buffer.byteLength(ct, "utf8") > 64 * 1024) {
+            return err(res, 400, "drop_too_large", "drop ciphertext must fit in 64 KB");
+          }
+          let ttlHours = Number(body.ttl_hours ?? 72);
+          if (!Number.isFinite(ttlHours)) ttlHours = 72;
+          ttlHours = Math.min(168, Math.max(1, Math.floor(ttlHours)));
+          const id = crypto.randomBytes(9).toString("base64url");
+          const now = nowIso();
+          const expiresAt = new Date(Date.now() + ttlHours * 3600_000).toISOString();
+          await store.createDrop(id, ct, now, expiresAt);
+          return sendJson(res, 201, { id, expires_at: expiresAt });
+        }
+      }
+
+      // ---- single-use drops: read-and-burn (no auth; the URL fragment holds the key) ----
+      {
+        const m = pathname.match(/^\/v1\/drops\/([A-Za-z0-9_-]{1,64})$/);
+        if (m && method === "GET") {
+          const row = await store.burnDrop(m[1]);
+          if (!row) return err(res, 404, "not_found", "drop not found or already burned");
+          return sendJson(res, 200, { ciphertext: row.ciphertext });
+        }
+      }
+
+      // ---- drop reader page ----
+      {
+        const m = pathname.match(/^\/d\/[A-Za-z0-9_-]{1,64}$/);
+        if (m && method === "GET") {
+          const file = path.join(WEB_DIR, "drop.html");
+          const data = fs.readFileSync(file);
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": data.length,
+            "cache-control": "no-cache",
+          });
+          return res.end(data);
         }
       }
 

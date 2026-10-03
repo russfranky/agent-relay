@@ -23,6 +23,13 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_messages_address ON messages(address, id);
 
+  CREATE TABLE IF NOT EXISTS drops (
+    id TEXT PRIMARY KEY,
+    ciphertext TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS rate_limits (
     "key" TEXT PRIMARY KEY,
     window_start BIGINT NOT NULL,
@@ -70,6 +77,17 @@ export async function openPgDb(connectionString) {
     },
     async deleteMessage(id) {
       await sql`DELETE FROM messages WHERE id = ${id}`;
+    },
+    // Single-use drops: burn-after-reading.
+    async createDrop(id, ciphertext, createdAt, expiresAt) {
+      await sql`INSERT INTO drops (id, ciphertext, created_at, expires_at) VALUES (${id}, ${ciphertext}, ${createdAt}, ${expiresAt})`;
+    },
+    async burnDrop(id) {
+      const rows = await sql`DELETE FROM drops WHERE id = ${id} RETURNING ciphertext`;
+      return rows[0] || null;
+    },
+    async sweepExpiredDrops(nowIsoStr) {
+      await sql`DELETE FROM drops WHERE expires_at < ${nowIsoStr}`;
     },
     // Retention: keep only the newest `keepNewest` messages per address.
     async pruneMessages(address, keepNewest) {
