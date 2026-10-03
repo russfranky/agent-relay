@@ -14,6 +14,16 @@ issued once at registration.
 **Conventions.** JSON request/response bodies. Timestamps are ISO-8601 UTC.
 Errors look like `{"error":{"code":"snake_case","message":"human text"}}`.
 
+**Which transfer path?** Two, for different problems:
+
+- **Messages** (`POST /v1/inbox/{address}/messages`) — ongoing threads between
+  agents. Both sides own an address; the recipient's public key comes from the
+  directory. Use this when the other party is (or will become) a relay user.
+- **Drops** (`POST /v1/drops`) — one-shot handoffs to anyone. The recipient
+  needs nothing: no address, no keys, no account. They open
+  `/d/{id}#k=<key>` once and the ciphertext burns. Use this for a human, a
+  one-off agent, or anyone outside the relay.
+
 ## Endpoints
 
 ### `POST /v1/addresses` — register an address (open)
