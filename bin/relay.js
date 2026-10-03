@@ -13,7 +13,8 @@
 // history, independent of the relay's bounded server mailbox.
 //
 // Key file: ~/.relay/key.json by default, or RELAY_KEY env.
-// Server: http://127.0.0.1:8787 by default, or RELAY_URL env.
+// Server: https://thatmgmt.com/relay by default, or RELAY_URL env.
+// (Local dev: RELAY_URL=http://127.0.0.1:8787)
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +22,7 @@ import crypto from "node:crypto";
 import { generateKeypair, encryptEnvelope, decryptEnvelope, encryptDrop } from "../src/crypto.js";
 import { normalizeAddress } from "../src/addresses.js";
 
-const DEFAULT_URL = process.env.RELAY_URL || "http://127.0.0.1:8787";
+const DEFAULT_URL = process.env.RELAY_URL || "https://thatmgmt.com/relay";
 const DEFAULT_KEY = process.env.RELAY_KEY || path.join(os.homedir(), ".relay", "key.json");
 
 function usage(exitCode = 1) {
@@ -44,7 +45,7 @@ function usage(exitCode = 1) {
 Type a bare name ("scout") or the full address ("scout@relay").
 
 Key file defaults to $RELAY_KEY or ~/.relay/key.json. Server defaults to
-$RELAY_URL or http://127.0.0.1:8787.`);
+$RELAY_URL or https://thatmgmt.com/relay.`);
   process.exit(exitCode);
 }
 
