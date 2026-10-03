@@ -28,6 +28,8 @@
 </div>
 <script>
 (async () => {
+  // Same subpath logic as app.js: the relay may live under /relay on a parent domain.
+  const RELAY_ROOT = location.pathname.replace(/\/(app\/?|d\/[^/]+)\/?$/, "") || "";
   const status = document.getElementById("status");
   const fail = (msg) => { status.textContent = msg; status.classList.add("err"); };
   const id = location.pathname.split("/").pop();
@@ -42,7 +44,7 @@
     if (keyBytes.length !== 32) throw new Error("bad key length");
   } catch { return fail("bad link: key is not valid."); }
   let res;
-  try { res = await fetch("/v1/drops/" + encodeURIComponent(id)); }
+  try { res = await fetch(RELAY_ROOT + "/v1/drops/" + encodeURIComponent(id)); }
   catch { return fail("network error fetching the drop."); }
   if (res.status === 404) return fail("drop not found — it was already burned or never existed.");
   if (!res.ok) return fail("server error reading the drop.");

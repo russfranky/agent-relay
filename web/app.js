@@ -135,12 +135,16 @@ function markRead(address, id) {
 }
 
 /* ---------- api (25s timeout: a hung request must never leave a button dead) ---------- */
+// API root: the relay may be served from a subpath (e.g. thatmgmt.com/relay).
+// Derive it from the page URL so absolute-looking "/v1/..." calls stay under
+// the same prefix instead of leaking onto the parent domain's own /v1 API.
+const RELAY_ROOT = location.pathname.replace(/\/(app\/?|d\/[^/]+)\/?$/, "") || "";
 async function api(method, path, body, token) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 25000);
   let res;
   try {
-    res = await fetch(path, {
+    res = await fetch(RELAY_ROOT + path, {
       method,
       signal: ctrl.signal,
       headers: {
@@ -270,7 +274,7 @@ async function copyShareLink() {
   try {
     const payload = await buildKeyFile();
     const b64url = bytesToB64Url(new TextEncoder().encode(JSON.stringify(payload)));
-    const url = `${location.origin}/app#k=${b64url}`;
+    const url = `${location.origin}${RELAY_ROOT}/app#k=${b64url}`;
     await navigator.clipboard.writeText(url);
     toast("Share link copied — anyone with it gets full access to this address");
   } catch (e) {
@@ -336,7 +340,7 @@ function renderList() {
 
   if (!messages.length) {
     list.innerHTML = `<div class="list-empty">
-      <img class="logo-img big" src="/logo.png" alt="Agent Relay logo">
+      <img class="logo-img big" src="logo.png" alt="Agent Relay logo">
       <p>No messages yet.<br>Share your address <strong>${escapeHtml(identity.address)}</strong> — messages land here the next time you check.</p>
     </div>`;
     return;
